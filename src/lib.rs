@@ -74,3 +74,6 @@ pub mod privacy_mode;
 pub mod virtual_display_manager;
 
 mod kcp_stream;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod file_cli;

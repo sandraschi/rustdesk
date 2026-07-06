@@ -745,6 +745,54 @@ pub fn core_main() -> Option<Vec<String>> {
                 }
                 return None;
             }
+            // rustdesk++ headless file transfer commands
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if args[0] == "--send-file" {
+                if args.len() < 4 {
+                    my_println!("Usage: rustdesk --send-file <peer_id> <local_path> <remote_path>");
+                    return None;
+                }
+                let peer_id = &args[1];
+                let local_path = &args[2];
+                let remote_path = &args[3];
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::file_cli::send_file(peer_id, local_path, remote_path)) {
+                    Ok(()) => my_println!("File sent successfully"),
+                    Err(e) => my_println!("Send failed: {}", e),
+                }
+                return None;
+            } else if args[0] == "--recv-file" {
+                if args.len() < 4 {
+                    my_println!("Usage: rustdesk --recv-file <peer_id> <remote_path> <local_path>");
+                    return None;
+                }
+                let peer_id = &args[1];
+                let remote_path = &args[2];
+                let local_path = &args[3];
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::file_cli::recv_file(peer_id, remote_path, local_path)) {
+                    Ok(()) => my_println!("File received successfully"),
+                    Err(e) => my_println!("Receive failed: {}", e),
+                }
+                return None;
+            } else if args[0] == "--list-dir" {
+                if args.len() < 3 {
+                    my_println!("Usage: rustdesk --list-dir <peer_id> <remote_path>");
+                    return None;
+                }
+                let peer_id = &args[1];
+                let remote_path = &args[2];
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::file_cli::list_dir(peer_id, remote_path)) {
+                    Ok(entries) => {
+                        for e in entries {
+                            println!("{}", e);
+                        }
+                    }
+                    Err(e) => my_println!("List failed: {}", e),
+                }
+                return None;
+            }
         }
     }
     //_async_logger_holder.map(|x| x.flush());
