@@ -159,6 +159,9 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
         .await
         .map_err(|e| format!("rendezvous: {}", e))?;
 
+    // Try OAuth token for public server connections  
+    let access_token = Config::get_option("access_token");
+
     // Register PK (rendezvous mediator handshake)
     let uuid_bytes: bytes::Bytes = hbb_common::get_uuid().into();
     let (_sk, pk) = Config::get_key_pair();
@@ -182,7 +185,6 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
             log::info!("Register PK confirmed");
         }
     } else {
-        // Server might send other messages, try PunchHole anyway
         log::warn!("Unexpected register response, continuing");
     }
 
@@ -191,6 +193,7 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
     let mut msg = RendezvousMessage::new();
     msg.set_punch_hole_request(PunchHoleRequest {
         id: peer_id.to_owned(),
+        token: access_token,
         conn_type: ConnType::FILE_TRANSFER.into(),
         version: crate::VERSION.to_owned(),
         nat_type: hbb_common::rendezvous_proto::NatType::UNKNOWN_NAT.into(),
