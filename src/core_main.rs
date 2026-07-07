@@ -13,12 +13,13 @@ use tauri_winrt_notification::{Duration, Sound, Toast};
 #[macro_export]
 macro_rules! my_println{
     ($($arg:tt)*) => {
-        #[cfg(not(windows))]
-        println!("{}", format_args!($($arg)*));
-        #[cfg(windows)]
-        crate::platform::message_box(
-            &format!("{}", format_args!($($arg)*))
-        );
+        if cfg!(not(windows)) {
+            println!("{}", format_args!($($arg)*));
+        } else {
+            crate::platform::message_box(
+                &format!("{}", format_args!($($arg)*))
+            );
+        }
     };
 }
 
@@ -755,7 +756,7 @@ pub fn core_main() -> Option<Vec<String>> {
                 let peer_id = &args[1];
                 let local_path = &args[2];
                 let remote_path = &args[3];
-                let rt = tokio::runtime::Runtime::new().unwrap();
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
                 match rt.block_on(crate::file_cli::send_file(peer_id, local_path, remote_path)) {
                     Ok(()) => my_println!("File sent successfully"),
                     Err(e) => my_println!("Send failed: {}", e),
@@ -769,7 +770,7 @@ pub fn core_main() -> Option<Vec<String>> {
                 let peer_id = &args[1];
                 let remote_path = &args[2];
                 let local_path = &args[3];
-                let rt = tokio::runtime::Runtime::new().unwrap();
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
                 match rt.block_on(crate::file_cli::recv_file(peer_id, remote_path, local_path)) {
                     Ok(()) => my_println!("File received successfully"),
                     Err(e) => my_println!("Receive failed: {}", e),
@@ -782,7 +783,7 @@ pub fn core_main() -> Option<Vec<String>> {
                 }
                 let peer_id = &args[1];
                 let remote_path = &args[2];
-                let rt = tokio::runtime::Runtime::new().unwrap();
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
                 match rt.block_on(crate::file_cli::list_dir(peer_id, remote_path)) {
                     Ok(entries) => {
                         for e in entries {
