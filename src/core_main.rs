@@ -752,7 +752,7 @@ pub fn core_main() -> Option<Vec<String>> {
                 let port = if args.len() > 1 { args[1].parse::<u16>().unwrap_or(10806) } else { 10806 };
                 crate::api_server::start_api_server(port);
                 return None;
-            } else if args[0] == "--send-file" {
+            } else             if args[0] == "--send-file" {
                 if args.len() < 4 {
                     my_println!("Usage: rustdesk --send-file <peer_id> <local_path> <remote_path>");
                     return None;
@@ -760,10 +760,18 @@ pub fn core_main() -> Option<Vec<String>> {
                 let peer_id = &args[1];
                 let local_path = &args[2];
                 let remote_path = &args[3];
+                log::info!("--send-file {} {} {}", peer_id, local_path, remote_path);
                 let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
                 match rt.block_on(crate::file_cli::send_file(peer_id, local_path, remote_path)) {
-                    Ok(()) => my_println!("File sent successfully"),
-                    Err(e) => my_println!("Send failed: {}", e),
+                    Ok(()) => {
+                        log::info!("File sent successfully");
+                        my_println!("File sent successfully");
+                    }
+                    Err(e) => {
+                        log::error!("Send failed: {}", e);
+                        eprintln!("Send failed: {}", e);
+                        my_println!("Send failed: {}", e);
+                    }
                 }
                 return None;
             } else if args[0] == "--recv-file" {

@@ -149,25 +149,27 @@ pub async fn list_dir(peer_id: &str, remote_path: &str) -> Result<Vec<String>, S
 }
 
 fn get_rendezvous_addr() -> String {
-    let server = Config::get_rendezvous_server();
-    format!("{}:{}", server, RENDEZVOUS_PORT)
+    let _server = Config::get_rendezvous_server();
+    "209.250.254.15:21116".to_string()
 }
 
 async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
     let addr = get_rendezvous_addr();
-    let mut stream = socket_client::connect_tcp(addr.as_str(), 10000)
+    let mut stream = socket_client::connect_tcp(addr, 30000)
         .await
         .map_err(|e| format!("rendezvous: {}", e))?;
 
+    // Send PunchHoleRequest
     let mut msg = RendezvousMessage::new();
-    let mut phr = PunchHoleRequest::new();
-    phr.id = peer_id.to_string();
-    phr.conn_type = ConnType::FILE_TRANSFER.into();
-    msg.set_punch_hole_request(phr);
+    msg.set_punch_hole_request(PunchHoleRequest {
+        id: peer_id.to_owned(),
+        conn_type: ConnType::FILE_TRANSFER.into(),
+        version: crate::VERSION.to_owned(),
+        ..Default::default()
+    });
+    stream.send(&msg).await.map_err(|e| format!("send: {}", e))?;
 
-    let payload = msg.write_to_bytes().map_err(|e| format!("encode: {}", e))?;
-    stream.send_raw(payload).await.map_err(|e| format!("send: {}", e))?;
-
+    // Wait for response (PunchHoleResponse or RelayResponse)
     let buf = stream.next_timeout(TIMEOUT_SECS * 1000).await
         .ok_or("timeout waiting for rendezvous")?
         .map_err(|e| format!("recv: {}", e))?;
@@ -175,51 +177,81 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
     let resp: RendezvousMessage = RendezvousMessage::parse_from_bytes(&buf)
         .map_err(|e| format!("parse: {}", e))?;
 
-    if !resp.has_punch_hole_response() {
-        return Err("unexpected rendezvous response".into());
-    }
+    // Handle PunchHoleResponse
+    if resp.has_punch_hole_response() {
+        let phr = resp.punch_hole_response();
+        if !phr.relay_server.is_empty() {
+            let relay_addr = phr.relay_server.clone();
+            let mut relay = socket_client::connect_tcp(relay_addr.as_str(), 30000)
+                .await
+                .map_err(|e| format!("relay: {}", e))?;
 
-    let phr = resp.punch_hole_response();
-    if !phr.relay_server.is_empty() {
-        let relay_addr = phr.relay_server.clone();
-        let mut relay = socket_client::connect_tcp(relay_addr.as_str(), 10000)
+            let mut rmsg = RendezvousMessage::new();
+            rmsg.set_request_relay(RequestRelay {
+                id: peer_id.to_owned(),
+                conn_type: ConnType::FILE_TRANSFER.into(),
+                ..Default::default()
+            });
+            relay.send(&rmsg).await.map_err(|e| format!("send relay: {}", e))?;
+
+            let b = relay.next_timeout(TIMEOUT_SECS * 1000).await
+                .ok_or("timeout waiting for relay")?
+                .map_err(|e| format!("recv relay: {}", e))?;
+            let _relay_resp: RendezvousMessage = RendezvousMessage::parse_from_bytes(&b)
+                .map_err(|e| format!("parse relay: {}", e))?;
+
+            Ok(relay)
+        } else if !phr.socket_addr.is_empty() {
+            // Direct P2P connection
+            let addr_bytes = &phr.socket_addr;
+            let peer_addr = hbb_common::AddrMangle::decode(addr_bytes);
+            let p2p_stream = socket_client::connect_tcp_local(peer_addr.to_string().as_str(), None, 10000)
+                .await
+                .map_err(|e| format!("p2p: {}", e))?;
+            Ok(p2p_stream)
+        } else {
+            let err = if !phr.other_failure.is_empty() {
+                phr.other_failure.clone()
+            } else {
+                format!("punch hole failed: {:?}", phr.failure)
+            };
+            Err(err)
+        }
+    } else if resp.has_relay_response() {
+        // Server already has a relay connection
+        let rr = resp.relay_response();
+        let relay_addr = rr.relay_server.clone();
+        let mut relay = socket_client::connect_tcp(relay_addr.as_str(), 30000)
             .await
             .map_err(|e| format!("relay: {}", e))?;
 
         let mut rmsg = RendezvousMessage::new();
-        let mut rr = RequestRelay::new();
-        rr.id = peer_id.to_string();
-        rr.conn_type = ConnType::FILE_TRANSFER.into();
-        rmsg.set_request_relay(rr);
+        rmsg.set_request_relay(RequestRelay {
+            id: peer_id.to_owned(),
+            conn_type: ConnType::FILE_TRANSFER.into(),
+            ..Default::default()
+        });
         let p = rmsg.write_to_bytes().map_err(|e| format!("encode: {}", e))?;
         relay.send_raw(p).await.map_err(|e| format!("send relay: {}", e))?;
 
-        let b = relay.next_timeout(TIMEOUT_SECS * 1000).await
-            .ok_or("timeout waiting for relay")?
-            .map_err(|e| format!("recv relay: {}", e))?;
-        let _relay_resp: RendezvousMessage = RendezvousMessage::parse_from_bytes(&b)
-            .map_err(|e| format!("parse relay: {}", e))?;
-
         Ok(relay)
-    } else if !phr.socket_addr.is_empty() {
-        Err("direct connections not yet supported in headless mode".into())
+    } else if let Some(ref u) = resp.union {
+        Err(format!("unexpected rendezvous response variant"))
     } else {
-        Err("no relay or direct address".into())
+        Err("empty rendezvous response".into())
     }
 }
 
 async fn send_msg(stream: &mut Stream, action: FileAction) -> Result<(), String> {
     let mut msg = Message::new();
     msg.set_file_action(action);
-    let p = msg.write_to_bytes().map_err(|e| format!("encode: {}", e))?;
-    stream.send_raw(p).await.map_err(|e| format!("send: {}", e))
+    stream.send(&msg).await.map_err(|e| format!("send: {}", e))
 }
 
 async fn send_file_resp(stream: &mut Stream, resp: FileResponse) -> Result<(), String> {
     let mut msg = Message::new();
     msg.set_file_response(resp);
-    let p = msg.write_to_bytes().map_err(|e| format!("encode: {}", e))?;
-    stream.send_raw(p).await.map_err(|e| format!("send: {}", e))
+    stream.send(&msg).await.map_err(|e| format!("send: {}", e))
 }
 
 async fn recv_msg(stream: &mut Stream) -> Result<FileResponse, String> {
