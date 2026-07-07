@@ -748,7 +748,11 @@ pub fn core_main() -> Option<Vec<String>> {
             }
             // rustdesk++ headless file transfer commands
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            if args[0] == "--send-file" {
+            if args[0] == "--api-server" {
+                let port = if args.len() > 1 { args[1].parse::<u16>().unwrap_or(10806) } else { 10806 };
+                crate::api_server::start_api_server(port);
+                return None;
+            } else if args[0] == "--send-file" {
                 if args.len() < 4 {
                     my_println!("Usage: rustdesk --send-file <peer_id> <local_path> <remote_path>");
                     return None;

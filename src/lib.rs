@@ -77,3 +77,6 @@ mod kcp_stream;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod file_cli;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod api_server;
