@@ -80,3 +80,9 @@ mod file_cli;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod api_server;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod ipc_tunnel;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod oauth_login;

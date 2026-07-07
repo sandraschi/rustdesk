@@ -752,7 +752,26 @@ pub fn core_main() -> Option<Vec<String>> {
                 let port = if args.len() > 1 { args[1].parse::<u16>().unwrap_or(10806) } else { 10806 };
                 crate::api_server::start_api_server(port);
                 return None;
-            } else             if args[0] == "--send-file" {
+            } else if args[0] == "--login" {
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::oauth_login::ensure_token()) {
+                    Ok(token) => {
+                        let display = if token.len() > 12 { format!("{}...{}", &token[..6], &token[token.len()-6..]) } else { token };
+                        my_println!("OAuth login OK. Token: {}", display);
+                    }
+                    Err(e) => my_println!("Login failed: {}", e),
+                }
+                return None;
+            } else if args[0] == "--ipc-send" {
+                if args.len() < 4 {
+                    my_println!("Usage: rustdesk --ipc-send <peer_id> <local_path> <remote_path>");
+                    return None;
+                }
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(crate::ipc_tunnel::transfer_via_ipc(&args[1], &args[2], &args[3], "upload")).ok();
+                my_println!("IPC file transfer request sent");
+                return None;
+            } else if args[0] == "--send-file" {
                 if args.len() < 4 {
                     my_println!("Usage: rustdesk --send-file <peer_id> <local_path> <remote_path>");
                     return None;
