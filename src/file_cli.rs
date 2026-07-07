@@ -3,6 +3,7 @@
 
 use hbb_common::{
     anyhow,
+    bytes,
     config::{self, Config, RENDEZVOUS_PORT},
     fs::{self, TransferJob},
     futures,
@@ -167,19 +168,52 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
         version: crate::VERSION.to_owned(),
         ..Default::default()
     });
-    stream.send(&msg).await.map_err(|e| format!("send: {}", e))?;
+    // Wait for initial message from server (RegisterPeerResponse with request_pk)
+    let init_resp = crate::get_next_nonkeyexchange_msg(&mut stream, Some(TIMEOUT_SECS * 1000))
+        .await
+        .ok_or("timeout waiting for initial server response")?;
 
-    // Wait for response (PunchHoleResponse or RelayResponse)
-    let buf = stream.next_timeout(TIMEOUT_SECS * 1000).await
-        .ok_or("timeout waiting for rendezvous")?
-        .map_err(|e| format!("recv: {}", e))?;
+    // Server sends RegisterPeerResponse asking for PK registration
+    if init_resp.has_register_peer_response() {
+        let rpr = init_resp.register_peer_response();
+        if rpr.request_pk {
+            let (_secret_key, public_key) = Config::get_key_pair();
+            let uuid_bytes: bytes::Bytes = hbb_common::get_uuid().into();
+            let mut rp = RegisterPk::new();
+            rp.id = Config::get_id();
+            rp.pk = public_key.into();
+            rp.uuid = uuid_bytes;
+            let mut reg_msg = RendezvousMessage::new();
+            reg_msg.set_register_pk(rp);
+            stream.send(&reg_msg).await.map_err(|e| format!("register_pk send: {}", e))?;
 
-    let resp: RendezvousMessage = RendezvousMessage::parse_from_bytes(&buf)
-        .map_err(|e| format!("parse: {}", e))?;
+            let reg_resp = crate::get_next_nonkeyexchange_msg(&mut stream, Some(TIMEOUT_SECS * 1000))
+                .await
+                .ok_or("timeout waiting for register_pk response")?;
+            if !reg_resp.has_register_pk_response() {
+                log::warn!("register_pk response unexpected");
+            } else {
+                log::info!("Register PK confirmed");
+            }
+        }
+    }
+
+    // Now send PunchHoleRequest on our registered connection
+    let mut punch_msg = RendezvousMessage::new();
+    punch_msg.set_punch_hole_request(PunchHoleRequest {
+        id: peer_id.to_owned(),
+        conn_type: ConnType::FILE_TRANSFER.into(),
+        version: crate::VERSION.to_owned(),
+        ..Default::default()
+    });
+    stream.send(&punch_msg).await.map_err(|e| format!("send punch: {}", e))?;
+
+    let resp = crate::get_next_nonkeyexchange_msg(&mut stream, Some(TIMEOUT_SECS * 1000))
+        .await
+        .ok_or("timeout waiting for punch response")?;
 
     // Handle PunchHoleResponse
-    if resp.has_punch_hole_response() {
-        let phr = resp.punch_hole_response();
+        let phr = resp2.punch_hole_response();
         if !phr.relay_server.is_empty() {
             let relay_addr = phr.relay_server.clone();
             let mut relay = socket_client::connect_tcp(relay_addr.as_str(), 30000)
@@ -194,11 +228,10 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
             });
             relay.send(&rmsg).await.map_err(|e| format!("send relay: {}", e))?;
 
-            let b = relay.next_timeout(TIMEOUT_SECS * 1000).await
-                .ok_or("timeout waiting for relay")?
-                .map_err(|e| format!("recv relay: {}", e))?;
-            let _relay_resp: RendezvousMessage = RendezvousMessage::parse_from_bytes(&b)
-                .map_err(|e| format!("parse relay: {}", e))?;
+            // Wait for relay response, skipping KeyExchange
+            let _relay_resp = crate::get_next_nonkeyexchange_msg(&mut relay, Some(TIMEOUT_SECS * 1000))
+                .await
+                .ok_or("timeout waiting for relay response")?;
 
             Ok(relay)
         } else if !phr.socket_addr.is_empty() {
@@ -231,8 +264,7 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
             conn_type: ConnType::FILE_TRANSFER.into(),
             ..Default::default()
         });
-        let p = rmsg.write_to_bytes().map_err(|e| format!("encode: {}", e))?;
-        relay.send_raw(p).await.map_err(|e| format!("send relay: {}", e))?;
+        relay.send(&rmsg).await.map_err(|e| format!("send relay: {}", e))?;
 
         Ok(relay)
     } else if let Some(ref u) = resp.union {
