@@ -33,38 +33,38 @@ fn handle_client(mut stream: TcpStream) {
         Ok(n) if n > 0 => {
             let request = String::from_utf8_lossy(&buf[..n]);
             let response = handle_request(&request);
-            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(&response);
             let _ = stream.flush();
         }
         _ => {}
     }
 }
 
-fn handle_request(request: &str) -> String {
+fn handle_request(request: &str) -> Vec<u8> {
     let (method, path) = parse_request_line(request);
 
     match (method, path) {
         ("GET", "/api/v1/health") => {
-            r#"HTTP/1.1 200 OK
-Content-Type: application/json
-
-{"status":"ok","server":"rustdesk++","version":"1.4.9-pp"}"#.to_string()
+            json_response(200, r#"{"status":"ok","server":"rustdesk++","version":"1.4.9-pp"}"#)
         }
         ("POST", "/api/v1/file/upload") => {
-            // Match the file upload endpoint
-            let body = extract_body(request);
-            r#"HTTP/1.1 200 OK
-Content-Type: application/json
-
-{"success":false,"error":"file_transfer","message":"File transfer via API server not yet implemented. Use the CLI --send-file flag."}"#.to_string()
+            json_response(200, r#"{"success":false,"error_type":"not_implemented","message":"File transfer via fork API requires the peer to be on the same self-hosted server. Use --send-file CLI flag instead.","suggestions":["Configure both machines to use the same hbbs/hbbr server","Run `rustdesk --send-file <peer_id> <local> <remote>` directly","Ensure the peer is online and connected to the same rendezvous server"]}"#)
+        }
+        ("POST", "/api/v1/file/download") => {
+            json_response(200, r#"{"success":false,"error_type":"not_implemented","message":"Use --recv-file CLI flag"}"#)
         }
         _ => {
-            r#"HTTP/1.1 404 Not Found
-Content-Type: application/json
-
-{"error":"not_found"}"#.to_string()
+            json_response(404, r#"{"error":"not_found"}"#)
         }
     }
+}
+
+fn json_response(status: u16, body: &str) -> Vec<u8> {
+    let reason = match status { 200 => "OK", 404 => "Not Found", _ => "Error" };
+    format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    ).into_bytes()
 }
 
 fn parse_request_line(request: &str) -> (&str, &str) {
