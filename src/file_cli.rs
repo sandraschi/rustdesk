@@ -150,7 +150,28 @@ pub async fn list_dir(peer_id: &str, remote_path: &str) -> Result<Vec<String>, S
 }
 
 fn get_rendezvous_addr() -> String {
-    "127.0.0.1:21116".to_string()
+    // connect_tcp has DNS resolution issues on this build.
+    // Use hardcoded IP for known servers, fall back to config for custom.
+    let server = Config::get_rendezvous_server();
+    let custom = Config::get_option("custom-rendezvous-server");
+    let target = if !custom.is_empty() { custom.as_str() } else { server.as_str() };
+
+    match target {
+        "rs-ny.rustdesk.com" | "" => "209.250.254.15:21116".to_string(),
+        s if s.contains(':') => s.to_string(),
+        s => format!("{}:{}", s, RENDEZVOUS_PORT),
+    }
+}
+
+/// Resolve a hostname:port string to an IP:port string using OS DNS.
+async fn resolve_addr(hostport: &str) -> Result<String, String> {
+    use std::net::ToSocketAddrs;
+    let mut addrs = hostport.to_socket_addrs()
+        .map_err(|e| format!("dns resolve '{}': {}", hostport, e))?;
+    let addr = addrs
+        .next()
+        .ok_or_else(|| format!("no address for '{}'", hostport))?;
+    Ok(addr.to_string())
 }
 
 async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
@@ -159,8 +180,8 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
         .await
         .map_err(|e| format!("rendezvous: {}", e))?;
 
-    // Try OAuth token for public server connections  
-    let access_token = Config::get_option("access_token");
+    // Try OAuth token (GUI stores it in RustDesk_local.toml)
+    let access_token = hbb_common::config::LocalConfig::get_option("access_token");
 
     // Register PK (rendezvous mediator handshake)
     let uuid_bytes: bytes::Bytes = hbb_common::get_uuid().into();
@@ -208,8 +229,16 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
                 let phr = resp.punch_hole_response();
                 if !phr.relay_server.is_empty() {
                     let relay_addr = phr.relay_server.clone();
-                    let mut relay = socket_client::connect_tcp(relay_addr, 30000)
-                        .await.map_err(|e| format!("relay: {}", e))?;
+                    log::info!("relay_server='{}'", relay_addr);
+                    let relay_hostport = if relay_addr.contains(':') {
+                        relay_addr
+                    } else {
+                        format!("{}:21117", relay_addr)
+                    };
+                    let relay_ip = resolve_addr(&relay_hostport).await
+                        .map_err(|e| format!("relay dns: {}", e))?;
+                    let mut relay = socket_client::connect_tcp_local(relay_ip.as_str(), None, 30000)
+                        .await.map_err(|e| format!("relay {}: {}", relay_ip, e))?;
 
                     let mut rr = RendezvousMessage::new();
                     rr.set_request_relay(RequestRelay {

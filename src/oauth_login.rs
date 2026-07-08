@@ -1,15 +1,11 @@
 /// rustdesk++ OAuth login for public RustDesk server.
 /// 
 /// The public RustDesk server (rs-ny.rustdesk.com) now requires OAuth login
-/// (Google/GitHub) due to botnet abuse. This module implements the flow:
-/// 1. Open browser to OAuth URL
-/// 2. Start local HTTP server for callback
-/// 3. Exchange code for token
-/// 4. Store token for subsequent connections
-///
-/// Reference: https://github.com/rustdesk/rustdesk/wiki/Login-required-for-public-server
+/// (Google/GitHub) due to botnet abuse. This module implements the flow.
+/// Note: The GUI stores its token in RustDesk_local.toml under LocalConfig.
+/// This module stores tokens there for compatibility.
 
-use hbb_common::{config::Config, log};
+use hbb_common::{config::LocalConfig, log};
 use std::collections::HashMap;
 
 const TOKEN_KEY: &str = "access_token";
@@ -18,7 +14,7 @@ const OAUTH_URL: &str = "https://api.rustdesk.com/oauth/authorize";
 /// Get a stored OAuth token, or trigger login flow.
 pub async fn ensure_token() -> Result<String, String> {
     // Check for existing token
-    let token = Config::get_option(TOKEN_KEY);
+    let token = LocalConfig::get_option(TOKEN_KEY);
     if !token.is_empty() {
         log::info!("Using stored OAuth token");
         return Ok(token);
@@ -28,8 +24,9 @@ pub async fn ensure_token() -> Result<String, String> {
     log::info!("No OAuth token found, starting login flow...");
     let token = login_flow().await?;
 
-    // Store the token
-    Config::set_option(TOKEN_KEY.to_string(), token.clone());
+    // Store the token in LocalConfig (same location as GUI)
+    LocalConfig::set_option(TOKEN_KEY.to_string(), token.clone());
+    log::info!("OAuth token stored in LocalConfig");
     Ok(token)
 }
 
@@ -38,10 +35,10 @@ async fn login_flow() -> Result<String, String> {
     let state = generate_state();
     let url = format!("{}?response_type=code&state={}", OAUTH_URL, state);
 
-    // Open browser
+    // Open browser with proper URL quoting for Windows cmd
     if cfg!(target_os = "windows") {
         std::process::Command::new("cmd")
-            .args(&["/c", "start", &url])
+            .args(&["/c", "start", "", &url])
             .spawn()
             .map_err(|e| format!("open browser: {}", e))?;
     } else {
