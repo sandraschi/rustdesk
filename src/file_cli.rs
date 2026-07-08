@@ -230,15 +230,22 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
                 if !phr.relay_server.is_empty() {
                     let relay_addr = phr.relay_server.clone();
                     log::info!("relay_server='{}'", relay_addr);
-                    let relay_hostport = if relay_addr.contains(':') {
+                    let relay_target = if relay_addr.contains(':') {
                         relay_addr
                     } else {
                         format!("{}:21117", relay_addr)
                     };
-                    let relay_ip = resolve_addr(&relay_hostport).await
-                        .map_err(|e| format!("relay dns: {}", e))?;
-                    let mut relay = socket_client::connect_tcp_local(relay_ip.as_str(), None, 30000)
-                        .await.map_err(|e| format!("relay {}: {}", relay_ip, e))?;
+                    // Resolve to SocketAddr via OS DNS, pass as resolved address
+                    use std::net::ToSocketAddrs;
+                    let socket_addrs: Vec<std::net::SocketAddr> = relay_target
+                        .to_socket_addrs()
+                        .map_err(|e| format!("relay dns: {}", e))?
+                        .collect();
+                    let remote_addr = *socket_addrs.first()
+                        .ok_or_else(|| "no relay address".to_string())?;
+                    let mut relay = socket_client::connect_tcp_local(
+                        remote_addr, None, 30000
+                    ).await.map_err(|e| format!("relay: {}", e))?;
 
                     let mut rr = RendezvousMessage::new();
                     rr.set_request_relay(RequestRelay {
@@ -269,19 +276,32 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
                     }
                 }
             } else if resp.has_relay_response() {
-                let rr = resp.relay_response();
-                let relay_addr = rr.relay_server.clone();
-                let mut relay = socket_client::connect_tcp(relay_addr, 30000)
+                let relay_resp = resp.relay_response();
+                let relay_str = relay_resp.relay_server.clone();
+                let relay_uuid = relay_resp.uuid.clone();
+                log::info!("relay_response server='{}'", relay_str);
+                let relay_target = if relay_str.contains(':') { relay_str } else { format!("{}:21117", relay_str) };
+                use std::net::ToSocketAddrs;
+                let addrs: Vec<std::net::SocketAddr> = relay_target.to_socket_addrs()
+                    .map_err(|e| format!("relay dns: {}", e))?.collect();
+                let relay_addr = *addrs.first().ok_or("no relay addr")?;
+                let mut relay = socket_client::connect_tcp_local(relay_addr, None, 30000)
                     .await.map_err(|e| format!("relay: {}", e))?;
 
-                let mut rr = RendezvousMessage::new();
-                rr.set_request_relay(RequestRelay {
+                let mut rmsg = RendezvousMessage::new();
+                rmsg.set_request_relay(RequestRelay {
                     id: peer_id.to_owned(),
                     conn_type: ConnType::FILE_TRANSFER.into(),
+                    uuid: relay_uuid.into(),
                     ..Default::default()
                 });
-                relay.send(&rr).await.map_err(|e| format!("relay send: {}", e))?;
-                return Ok(relay);
+                relay.send(&rmsg).await.map_err(|e| format!("relay send: {}", e))?;
+
+                // Wait for relay response with extended timeout (peer may be offline)
+                match crate::get_next_nonkeyexchange_msg(&mut relay, Some(120000)).await {
+                    Some(_resp) => return Ok(relay),
+                    None => return Err("relay: no response from relay server (peer may be offline or using different relay)".into()),
+                }
             }
         }
         log::info!("Punch attempt {} failed, retrying...", i);
