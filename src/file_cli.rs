@@ -183,37 +183,29 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
     // Try OAuth token (GUI stores it in RustDesk_local.toml)
     let access_token = hbb_common::config::LocalConfig::get_option("access_token");
 
-    // Skip register-pk for local self-hosted servers (key mismatch not relevant)
-    let addr = get_rendezvous_addr();
-    let is_local = addr.starts_with("127.0.0.1") || addr.starts_with("192.168.") || addr.starts_with("10.");
-    
-    if !is_local {
-        // Register PK for public server connections
-        let uuid_bytes: bytes::Bytes = hbb_common::get_uuid().into();
-        let (_sk, pk) = Config::get_key_pair();
-        let mut rp = RegisterPk::new();
-        rp.id = Config::get_id();
-        rp.pk = pk.into();
-        rp.uuid = uuid_bytes;
-        let mut reg_msg = RendezvousMessage::new();
-        reg_msg.set_register_pk(rp);
-        stream.send(&reg_msg).await.map_err(|e| format!("register: {}", e))?;
+    // Register PK (required even for local servers — PunchHoleRequest won't be answered otherwise)
+    let uuid_bytes: bytes::Bytes = hbb_common::get_uuid().into();
+    let (_sk, pk) = Config::get_key_pair();
+    let mut rp = RegisterPk::new();
+    rp.id = Config::get_id();
+    rp.pk = pk.into();
+    rp.uuid = uuid_bytes;
+    let mut reg_msg = RendezvousMessage::new();
+    reg_msg.set_register_pk(rp);
+    stream.send(&reg_msg).await.map_err(|e| format!("register: {}", e))?;
 
-        let reg_resp = crate::get_next_nonkeyexchange_msg(&mut stream, Some(10000))
-            .await.ok_or("register timeout")?;
+    let reg_resp = crate::get_next_nonkeyexchange_msg(&mut stream, Some(10000))
+        .await.ok_or("register timeout")?;
 
-        if reg_resp.has_register_pk_response() {
-            let rpr = reg_resp.register_pk_response();
-            if rpr.result.enum_value() != Ok(register_pk_response::Result::OK) {
-                log::warn!("Register PK not OK, continuing anyway");
-            } else {
-                log::info!("Register PK confirmed");
-            }
+    if reg_resp.has_register_pk_response() {
+        let rpr = reg_resp.register_pk_response();
+        if rpr.result.enum_value() != Ok(register_pk_response::Result::OK) {
+            log::warn!("Register PK not OK, continuing anyway");
         } else {
-            log::warn!("Unexpected register response, continuing");
+            log::info!("Register PK confirmed");
         }
     } else {
-        log::info!("Local server detected, skipping register-pk");
+        log::warn!("Unexpected register response, continuing");
     }
 
     // Now send PunchHoleRequest (matching client.rs::_start_inner)
@@ -225,7 +217,6 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
         conn_type: ConnType::FILE_TRANSFER.into(),
         version: crate::VERSION.to_owned(),
         nat_type: hbb_common::rendezvous_proto::NatType::UNKNOWN_NAT.into(),
-        force_relay: true,
         ..Default::default()
     });
 
@@ -279,7 +270,14 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
                             return Err("ID does not exist".into()),
                         Ok(punch_hole_response::Failure::OFFLINE) =>
                             return Err("Remote desktop is offline".into()),
-                        _ => {}
+                        Ok(punch_hole_response::Failure::LICENSE_MISMATCH) =>
+                            return Err("License key mismatch".into()),
+                        Ok(punch_hole_response::Failure::LICENSE_OVERUSE) =>
+                            return Err("License key overuse".into()),
+                        _ => {
+                            let v = phr.failure.value();
+                            log::info!("Punch failure={} (no relay or direct addr)", v);
+                        }
                     }
                 }
             } else if resp.has_relay_response() {
@@ -298,7 +296,7 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
                 let mut rmsg = RendezvousMessage::new();
                 rmsg.set_request_relay(RequestRelay {
                     id: peer_id.to_owned(),
-                    conn_type: ConnType::FILE_TRANSFER.into(),
+        conn_type: ConnType::DEFAULT_CONN.into(),
                     uuid: relay_uuid.into(),
                     ..Default::default()
                 });
@@ -313,7 +311,7 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
         }
         log::info!("Punch attempt {} failed, retrying...", i);
     }
-    Err("all punch attempts failed".into())
+    Err("all punch attempts failed — peer may be behind NAT. Ensure hbbr is running on 21117.".into())
 }
 
 async fn send_msg(stream: &mut Stream, action: FileAction) -> Result<(), String> {
