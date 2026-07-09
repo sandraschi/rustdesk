@@ -7,8 +7,8 @@ sc delete RustDeskHbbr 2>nul
 set HBB_DIR=D:\Dev\repos\rustdesk-server\target\release
 set HBB_DATA=D:\Dev\repos\rustdesk-server\data
 
-schtasks /Create /SC ONSTART /TN "RustDesk hbbs" /TR "cmd /c cd /d %HBB_DATA% && %HBB_DIR%\hbbs.exe" /RL HIGHEST /F
-schtasks /Create /SC ONSTART /TN "RustDesk hbbr" /TR "cmd /c cd /d %HBB_DATA% && %HBB_DIR%\hbbr.exe" /RL HIGHEST /F
+schtasks /Create /SC ONSTART /TN "RustDesk hbbs" /TR "cmd /c cd /d %HBB_DATA% & %HBB_DIR%\hbbs.exe" /RL HIGHEST /F
+schtasks /Create /SC ONSTART /TN "RustDesk hbbr" /TR "cmd /c cd /d %HBB_DATA% & %HBB_DIR%\hbbr.exe" /RL HIGHEST /F
 
 echo Starting tasks...
 schtasks /Run /TN "RustDesk hbbs"
