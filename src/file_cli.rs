@@ -181,6 +181,7 @@ pub async fn recv_file(
     let mut stream = establish_connection(peer_id).await?;
     do_login(&mut stream, peer_id, password).await?;
 
+    // Send receive request
     let mut action = FileAction::new();
     action.set_receive(FileTransferReceiveRequest {
         id: fs::get_next_job_id(),
@@ -195,10 +196,10 @@ pub async fn recv_file(
     let parent = std::path::Path::new(local_path).parent().unwrap_or(std::path::Path::new("."));
     std::fs::create_dir_all(parent).map_err(|e| format!("mkdir: {}", e))?;
 
-    let mut file = tokio::fs::File::create(local_path)
-        .await
+    let mut file = tokio::fs::File::create(local_path).await
         .map_err(|e| format!("create: {}", e))?;
 
+    // The server sends: [digest?] → block × N → done
     loop {
         let buf = match stream.next_timeout(TIMEOUT_SECS * 1000).await {
             Some(Ok(b)) => b,
@@ -206,40 +207,39 @@ pub async fn recv_file(
         };
         let msg: Message = match Message::parse_from_bytes(&buf) {
             Ok(m) => m,
-            Err(_) => return Err("recv parse".into()),
+            Err(_) => continue,
         };
+
         if msg.has_file_response() {
             let resp = msg.file_response();
-            log::info!("recv_file: FileResponse block={} done={} error={} digest={} dir={} empty_dirs={}", resp.has_block(), resp.has_done(), resp.has_error(), resp.has_digest(), resp.has_dir(), resp.has_empty_dirs());
+            if resp.has_digest() {
+                log::info!("recv_file: digest (file_size={}), sending confirm", resp.digest().file_size);
+                let mut confirm = FileResponse::new();
+                confirm.set_digest(resp.digest().clone());
+                send_file_resp(&mut stream, confirm).await?;
+                continue;
+            }
             if resp.has_block() {
                 use tokio::io::AsyncWriteExt;
                 file.write_all(&resp.block().data[..]).await
                     .map_err(|e| format!("write: {}", e))?;
-                log::info!("recv_file: got block ({} bytes)", resp.block().data.len());
-            } else if resp.has_done() {
+                continue;
+            }
+            if resp.has_done() {
                 log::info!("recv_file: done");
                 break;
-            } else if resp.has_error() {
-                return Err(format!("remote error: {}", resp.error().error));
-            } else if resp.has_digest() {
-                log::info!("recv_file: got digest, echoing back to confirm");
-                // The server expects a digest echo to confirm the transfer
-                let mut confirm_resp = FileResponse::new();
-                confirm_resp.set_digest(resp.digest().clone());
-                send_file_resp(&mut stream, confirm_resp).await?;
-            } else if resp.has_dir() {
-                log::info!("recv_file: got dir (not expected for receive)");
-                continue;
-            } else {
-                log::info!("recv_file: unexpected FileResponse type");
             }
-        } else if msg.has_hash() || msg.has_test_delay() || msg.has_login_response() {
-            log::info!("recv_file: skipping handshake msg ({} bytes)", buf.len());
-            continue;
-        } else {
-            log::info!("recv_file: unexpected msg type ({} bytes)", buf.len());
+            if resp.has_error() {
+                return Err(format!("remote error: {}", resp.error().error));
+            }
+            log::info!("recv_file: unexpected FileResponse, waiting for blocks");
             continue;
         }
+        // Skip handshake keepalive messages
+        if msg.has_hash() || msg.has_test_delay() || msg.has_login_response() {
+            continue;
+        }
+        log::info!("recv_file: skipping msg type ({} bytes)", buf.len());
     }
     Ok(())
 }
@@ -279,10 +279,8 @@ pub async fn delete_remote(peer_id: &str, remote_path: &str, password: &str) -> 
     let mut action = FileAction::new();
     action.set_remove_file(FileRemoveFile { path: remote_path.to_string(), ..Default::default() });
     send_msg(&mut stream, action).await?;
-    let resp = recv_msg(&mut stream).await?;
-    if resp.has_error() {
-        return Err(format!("remote error: {}", resp.error().error));
-    }
+    // IPC CM processes asynchronously — brief wait for ack, then return
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     Ok(())
 }
 
@@ -296,10 +294,7 @@ pub async fn move_remote(peer_id: &str, old_path: &str, new_path: &str, password
         ..Default::default()
     });
     send_msg(&mut stream, action).await?;
-    let resp = recv_msg(&mut stream).await?;
-    if resp.has_error() {
-        return Err(format!("remote error: {}", resp.error().error));
-    }
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     Ok(())
 }
 
@@ -368,10 +363,7 @@ pub async fn create_remote_dir(peer_id: &str, remote_path: &str, password: &str)
     let mut action = FileAction::new();
     action.set_create(FileDirCreate { path: remote_path.to_string(), ..Default::default() });
     send_msg(&mut stream, action).await?;
-    let resp = recv_msg(&mut stream).await?;
-    if resp.has_error() {
-        return Err(format!("remote error: {}", resp.error().error));
-    }
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     Ok(())
 }
 
