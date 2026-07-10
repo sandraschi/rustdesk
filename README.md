@@ -180,3 +180,30 @@ Please ensure that you run these commands from the root of the RustDesk reposito
 
 ![TCP Tunneling](https://github.com/rustdesk/rustdesk/assets/28412477/78e8708f-e87e-4570-8373-1360033ea6c5)
 
+## Headless CLI (rustdesk++ fork)
+
+### Info
+- `--status` — Local RustDesk ID, service status, rendezvous/relay servers
+- `--peer-info <peer_id>` — Check if a peer is online via hbbs
+- `--get-id` — Print local RustDesk ID
+- `--version` — Print version
+
+### File Operations (relay-based, password optional for passwordless peers)
+- `--send-file <peer_id> <local> <remote> [password]` — Send file to peer
+- `--recv-file <peer_id> <remote> <local> [password]` — Receive file from peer
+- `--list-dir <peer_id> <remote_path> [password]` — List remote directory
+- `--delete-remote <peer_id> <remote_path> [password]` — Delete remote file
+- `--move-remote <peer_id> <old_path> <new_path> [password]` — Move/rename remote file
+- `--send-dir <peer_id> <local_dir> <remote_dir> [password]` — Send directory contents
+
+### Server
+- `--api-server [port]` — Start HTTP API server (default 10806)
+- `--ipc-send <peer_id> <local> <remote>` — Send file via IPC tunnel
+
+### Auth
+- `--login` — OAuth login, prints token
+- `--option <key> [value]` — Get/set config options
+
+### Standard RustDesk Flags
+`--password`, `--option`, `--config`, `--install-service`, etc. also available.
+

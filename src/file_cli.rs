@@ -9,7 +9,7 @@ use hbb_common::{
     futures,
     log,
     message_proto::*,
-    protobuf::{self, Message as _},
+    protobuf::{self, Enum as _, Message as _},
     rendezvous_proto::*,
     socket_client,
     timeout,
@@ -20,12 +20,103 @@ use std::sync::Arc;
 
 const TIMEOUT_SECS: u64 = 30;
 
+/// After relay pairing, skip messages until LoginResponse.
+/// Sends LoginRequest with SHA256 hashed password (matching server verify_h1).
+async fn do_login(stream: &mut Stream, peer_id: &str, password: &str) -> Result<(), String> {
+    use hbb_common::sha2::{Digest, Sha256};
+
+    // Drain initial messages and extract Hash salt+challenge for password hashing
+    let mut hash_salt = String::new();
+    let mut hash_challenge = String::new();
+    loop {
+        let buf = match stream.next_timeout(2000).await {
+            Some(Ok(b)) => b,
+            _ => break,
+        };
+        if let Ok(m) = Message::parse_from_bytes(&buf) {
+            if m.has_hash() {
+                let h = m.hash();
+                hash_salt = h.salt.clone();
+                hash_challenge = h.challenge.clone();
+                log::info!("do_login: got hash salt='{}' challenge='{}'", hash_salt, hash_challenge);
+                continue;
+            }
+        }
+        log::info!("do_login: draining {} bytes", buf.len());
+    }
+
+    // Compute h1 = SHA256(password + salt), then h2 = SHA256(h1 + challenge)
+    let password_hashed = if !hash_challenge.is_empty() {
+        let mut h1_hasher = Sha256::new();
+        h1_hasher.update(password.as_bytes());
+        h1_hasher.update(hash_salt.as_bytes());
+        let h1 = h1_hasher.finalize();
+        let mut h2_hasher = Sha256::new();
+        h2_hasher.update(h1);
+        h2_hasher.update(hash_challenge.as_bytes());
+        Some(h2_hasher.finalize().to_vec())
+    } else {
+        None
+    };
+
+    // Try hashed password first, then raw password
+    let attempts: Vec<Vec<u8>> = {
+        let raw = password.as_bytes().to_vec();
+        if let Some(hashed) = password_hashed {
+            vec![hashed, raw]
+        } else {
+            vec![raw]
+        }
+    };
+
+    for (i, pwd_bytes) in attempts.iter().enumerate() {
+        let mut lr = LoginRequest::new();
+        lr.username = peer_id.to_owned();
+        lr.password = pwd_bytes.clone().into();
+        lr.my_id = Config::get_id();
+        lr.my_platform = "Windows".to_owned();
+        lr.version = crate::VERSION.to_owned();
+        lr.set_file_transfer(FileTransfer::new());
+        let mut msg = Message::new();
+        msg.set_login_request(lr);
+        stream.send(&msg).await.map_err(|e| format!("login send: {}", e))?;
+
+        for _ in 0..3 {
+            let buf = match stream.next_timeout(15000).await {
+                Some(Ok(b)) => b,
+                Some(Err(e)) => return Err(format!("login recv: {}", e)),
+                None => break,
+            };
+            let msg: Message = match Message::parse_from_bytes(&buf) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if msg.has_login_response() {
+                let resp = msg.login_response();
+                if resp.has_error() && !resp.error().is_empty() {
+                    if i + 1 < attempts.len() {
+                        log::info!("do_login: attempt {} failed ({}), retrying raw", i + 1, resp.error());
+                    } else {
+                        return Err(format!("login failed: {}", resp.error()));
+                    }
+                } else {
+                    log::info!("do_login: login accepted");
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Err("login: failed after all attempts".into())
+}
+
 pub async fn send_file(
     peer_id: &str,
     local_path: &str,
     remote_path: &str,
+    password: &str,
 ) -> Result<(), String> {
     let mut stream = establish_connection(peer_id).await?;
+    do_login(&mut stream, peer_id, password).await?;
     let _path = std::path::Path::new(local_path);
     let file_name = fs::get_file_name(_path);
     let _file_size = std::fs::metadata(local_path)
@@ -85,8 +176,10 @@ pub async fn recv_file(
     peer_id: &str,
     remote_path: &str,
     local_path: &str,
+    password: &str,
 ) -> Result<(), String> {
     let mut stream = establish_connection(peer_id).await?;
+    do_login(&mut stream, peer_id, password).await?;
 
     let mut action = FileAction::new();
     action.set_receive(FileTransferReceiveRequest {
@@ -121,8 +214,9 @@ pub async fn recv_file(
     Ok(())
 }
 
-pub async fn list_dir(peer_id: &str, remote_path: &str) -> Result<Vec<String>, String> {
+pub async fn list_dir(peer_id: &str, remote_path: &str, password: &str) -> Result<Vec<String>, String> {
     let mut stream = establish_connection(peer_id).await?;
+    do_login(&mut stream, peer_id, password).await?;
 
     let mut action = FileAction::new();
     action.set_read_dir(ReadDir {
@@ -147,6 +241,111 @@ pub async fn list_dir(peer_id: &str, remote_path: &str) -> Result<Vec<String>, S
     } else {
         Err("unexpected response".into())
     }
+}
+
+pub async fn delete_remote(peer_id: &str, remote_path: &str, password: &str) -> Result<(), String> {
+    let mut stream = establish_connection(peer_id).await?;
+    do_login(&mut stream, peer_id, password).await?;
+    let mut action = FileAction::new();
+    action.set_remove_file(FileRemoveFile { path: remote_path.to_string(), ..Default::default() });
+    send_msg(&mut stream, action).await?;
+    let resp = recv_msg(&mut stream).await?;
+    if resp.has_error() {
+        return Err(format!("remote error: {}", resp.error().error));
+    }
+    Ok(())
+}
+
+pub async fn move_remote(peer_id: &str, old_path: &str, new_path: &str, password: &str) -> Result<(), String> {
+    let mut stream = establish_connection(peer_id).await?;
+    do_login(&mut stream, peer_id, password).await?;
+    let mut action = FileAction::new();
+    action.set_rename(FileRename {
+        path: old_path.to_string(),
+        new_name: new_path.to_string(),
+        ..Default::default()
+    });
+    send_msg(&mut stream, action).await?;
+    let resp = recv_msg(&mut stream).await?;
+    if resp.has_error() {
+        return Err(format!("remote error: {}", resp.error().error));
+    }
+    Ok(())
+}
+
+pub async fn send_dir(peer_id: &str, local_dir: &str, remote_dir: &str, password: &str) -> Result<(), String> {
+    let entries = std::fs::read_dir(local_dir)
+        .map_err(|e| format!("read local dir {}: {}", local_dir, e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("entry: {}", e))?;
+        let path = entry.path();
+        if path.is_file() {
+            let name = path.file_name().unwrap().to_string_lossy();
+            let remote = format!("{}/{}", remote_dir.trim_end_matches('/'), name);
+            let local = path.to_string_lossy().to_string();
+            send_file(peer_id, &local, &remote, password).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Check if a peer is online. Connects to hbbs and sends a minimal probe.
+pub async fn peer_info(peer_id: &str) -> Result<String, String> {
+    let addr = get_rendezvous_addr();
+    let mut stream = socket_client::connect_tcp(addr, 30000)
+        .await.map_err(|e| format!("rendezvous: {}", e))?;
+    let mut msg = RendezvousMessage::new();
+    let licence_key = crate::get_key(true).await;
+    msg.set_punch_hole_request(PunchHoleRequest {
+        id: peer_id.to_owned(),
+        licence_key,
+        conn_type: ConnType::FILE_TRANSFER.into(),
+        version: crate::VERSION.to_owned(),
+        nat_type: hbb_common::rendezvous_proto::NatType::UNKNOWN_NAT.into(),
+        ..Default::default()
+    });
+    stream.send(&msg).await.map_err(|e| format!("send: {}", e))?;
+    if let Some(resp) = crate::get_next_nonkeyexchange_msg(&mut stream, Some(10000)).await {
+        if resp.has_punch_hole_response() {
+            use hbb_common::protobuf::Enum;
+            let phr = resp.punch_hole_response();
+            let failure = phr.failure.enum_value().unwrap_or(punch_hole_response::Failure::ID_NOT_EXIST);
+            let msg_str = if phr.other_failure.is_empty() {
+                match failure {
+                    punch_hole_response::Failure::OFFLINE => format!("{}: offline", peer_id),
+                    punch_hole_response::Failure::ID_NOT_EXIST => format!("{}: not found", peer_id),
+                    punch_hole_response::Failure::LICENSE_MISMATCH => format!("{}: key mismatch", peer_id),
+                    punch_hole_response::Failure::LICENSE_OVERUSE => format!("{}: key overuse", peer_id),
+                    _ => format!("{}: failure code {}", peer_id, failure.value()),
+                }
+            } else {
+                format!("{}: {}", peer_id, phr.other_failure)
+            };
+            if !phr.relay_server.is_empty() || !phr.socket_addr.is_empty() {
+                return Ok(format!("{}: online via {}", peer_id, if !phr.relay_server.is_empty() { "relay" } else { "direct" }));
+            }
+            return Ok(msg_str);
+        } else if resp.has_relay_response() {
+            return Ok(format!("{}: online (relay ready)", peer_id));
+        }
+    }
+    Err("peer_info: no response from server".into())
+}
+
+/// Local RustDesk status: ID, service, connected peers.
+pub fn local_status() -> Result<String, String> {
+    let id = Config::get_id();
+    let svc_running = std::process::Command::new("sc")
+        .args(["query", "RustDesk"])
+        .output()
+        .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("RUNNING"))
+        .unwrap_or(false);
+    let rd = Config::get_rendezvous_server();
+    let rs = Config::get_option("relay-server");
+    Ok(format!(
+        "RustDesk++ Headless\n  ID: {}\n  Service: {}\n  Rendezvous: {}\n  Relay: {}\n  Version: {}",
+        id, if svc_running { "running" } else { "stopped" }, rd, rs, crate::VERSION
+    ))
 }
 
 fn get_rendezvous_addr() -> String {
@@ -210,9 +409,11 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
     // Now send PunchHoleRequest (matching client.rs::_start_inner)
     use hbb_common::protobuf::Enum;
     let mut msg = RendezvousMessage::new();
+    let licence_key = crate::get_key(true).await;
     msg.set_punch_hole_request(PunchHoleRequest {
         id: peer_id.to_owned(),
         token: access_token,
+        licence_key,
         conn_type: ConnType::FILE_TRANSFER.into(),
         version: crate::VERSION.to_owned(),
         nat_type: hbb_common::rendezvous_proto::NatType::UNKNOWN_NAT.into(),
@@ -221,7 +422,10 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
 
     for i in 1..=3 {
         stream.send(&msg).await.map_err(|e| format!("punch #{}: {}", i, e))?;
-        if let Some(resp) = crate::get_next_nonkeyexchange_msg(&mut stream, Some(i * 3000)).await {
+        let timeout_secs = if i == 1 { 30 } else { i * 3 };
+        log::info!("Punch attempt {} waiting {}s for response", i, timeout_secs);
+        if let Some(resp) = crate::get_next_nonkeyexchange_msg(&mut stream, Some(timeout_secs * 1000)).await {
+            log::info!("Received response type: punch_hole_response={} relay_response={} fetch_local_addr={}", resp.has_punch_hole_response(), resp.has_relay_response(), resp.has_fetch_local_addr());
             if resp.has_punch_hole_response() {
                 let phr = resp.punch_hole_response();
                 if !phr.relay_server.is_empty() {
@@ -301,11 +505,45 @@ async fn establish_connection(peer_id: &str) -> Result<Stream, String> {
                 });
                 relay.send(&rmsg).await.map_err(|e| format!("relay send: {}", e))?;
 
-                // Wait for relay response with extended timeout (peer may be offline)
-                match crate::get_next_nonkeyexchange_msg(&mut relay, Some(120000)).await {
-                    Some(_resp) => return Ok(relay),
-                    None => return Err("relay: no response from relay server (peer may be offline or using different relay)".into()),
+                            // Read the raw pairing response. It could be a RendezvousMessage
+                // (KeyExchange) or a Message (SignedId). If it's SignedId, respond
+                // with empty PublicKey to bypass encryption and let the peer proceed
+                // to Connection::start.
+                loop {
+                    let buf = match relay.next_timeout(30000).await {
+                        Some(Ok(b)) => b,
+                        Some(Err(e)) => return Err(format!("relay pairing: {}", e)),
+                        None => return Err("relay: timeout after pairing".into()),
+                    };
+                    // Try as Message first (application layer)
+                    if let Ok(app_msg) = Message::parse_from_bytes(&buf) {
+                        if app_msg.has_signed_id() {
+                            log::info!("relay: got SignedId, responding with empty PublicKey");
+                            let mut pk_msg = Message::new();
+                            pk_msg.set_public_key(PublicKey {
+                                asymmetric_value: bytes::Bytes::new(),
+                                symmetric_value: bytes::Bytes::new(),
+                                ..Default::default()
+                            });
+                            relay.send(&pk_msg).await.map_err(|e| format!("pk send: {}", e))?;
+                            break;
+                        }
+                        if app_msg.has_hash() || app_msg.has_test_delay() {
+                            log::info!("relay: already at Connection::start (Hash/TestDelay)");
+                            break;
+                        }
+                    }
+                    // Try as RendezvousMessage and skip KeyExchange
+                    if let Ok(rz_msg) = hbb_common::rendezvous_proto::RendezvousMessage::parse_from_bytes(&buf) {
+                        if rz_msg.has_key_exchange() {
+                            log::info!("relay: skipped KeyExchange");
+                            continue;
+                        }
+                    }
+                    log::info!("relay: unexpected msg after pairing ({} bytes)", buf.len());
+                    break;
                 }
+                return Ok(relay);
             } else {
                 log::info!("Unexpected response type from server");
             }
@@ -330,14 +568,20 @@ async fn send_file_resp(stream: &mut Stream, resp: FileResponse) -> Result<(), S
 }
 
 async fn recv_msg(stream: &mut Stream) -> Result<FileResponse, String> {
-    let buf = stream.next_timeout(TIMEOUT_SECS * 1000).await
-        .ok_or("timeout")?
-        .map_err(|e| format!("recv: {}", e))?;
-    let msg: Message = Message::parse_from_bytes(&buf)
-        .map_err(|e| format!("parse: {}", e))?;
-    if msg.has_file_response() {
-        Ok(msg.file_response().clone())
-    } else {
-        Err("unexpected message (not file_response)".into())
+    loop {
+        let buf = stream.next_timeout(TIMEOUT_SECS * 1000).await
+            .ok_or("timeout")?
+            .map_err(|e| format!("recv: {}", e))?;
+        let msg: Message = Message::parse_from_bytes(&buf)
+            .map_err(|e| format!("parse: {}", e))?;
+        if msg.has_file_response() {
+            return Ok(msg.file_response().clone());
+        } else if msg.has_hash() || msg.has_test_delay() || msg.has_signed_id() || msg.has_login_request() || msg.has_login_response() {
+            log::info!("recv_msg: skipping handshake msg type ({} bytes), waiting for FileResponse", buf.len());
+            continue;
+        } else {
+            log::info!("recv_msg: unexpected msg type bytes_len={} raw_hex_first32={:02x?}", buf.len(), &buf[..buf.len().min(32)]);
+            continue;
+        }
     }
 }

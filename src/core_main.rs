@@ -773,15 +773,16 @@ pub fn core_main() -> Option<Vec<String>> {
                 return None;
             } else if args[0] == "--send-file" {
                 if args.len() < 4 {
-                    my_println!("Usage: rustdesk --send-file <peer_id> <local_path> <remote_path>");
+                    my_println!("Usage: rustdesk --send-file <peer_id> <local_path> <remote_path> [password]");
                     return None;
                 }
                 let peer_id = &args[1];
                 let local_path = &args[2];
                 let remote_path = &args[3];
+                let password = args.get(4).map(|s| s.as_str()).unwrap_or("");
                 log::info!("--send-file {} {} {}", peer_id, local_path, remote_path);
                 let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
-                match rt.block_on(crate::file_cli::send_file(peer_id, local_path, remote_path)) {
+                match rt.block_on(crate::file_cli::send_file(peer_id, local_path, remote_path, password)) {
                     Ok(()) => {
                         log::info!("File sent successfully");
                         my_println!("File sent successfully");
@@ -795,27 +796,29 @@ pub fn core_main() -> Option<Vec<String>> {
                 return None;
             } else if args[0] == "--recv-file" {
                 if args.len() < 4 {
-                    my_println!("Usage: rustdesk --recv-file <peer_id> <remote_path> <local_path>");
+                    my_println!("Usage: rustdesk --recv-file <peer_id> <remote_path> <local_path> [password]");
                     return None;
                 }
                 let peer_id = &args[1];
                 let remote_path = &args[2];
                 let local_path = &args[3];
+                let password = args.get(4).map(|s| s.as_str()).unwrap_or("");
                 let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
-                match rt.block_on(crate::file_cli::recv_file(peer_id, remote_path, local_path)) {
+                match rt.block_on(crate::file_cli::recv_file(peer_id, remote_path, local_path, password)) {
                     Ok(()) => my_println!("File received successfully"),
                     Err(e) => my_println!("Receive failed: {}", e),
                 }
                 return None;
             } else if args[0] == "--list-dir" {
                 if args.len() < 3 {
-                    my_println!("Usage: rustdesk --list-dir <peer_id> <remote_path>");
+                    my_println!("Usage: rustdesk --list-dir <peer_id> <remote_path> [password]");
                     return None;
                 }
                 let peer_id = &args[1];
                 let remote_path = &args[2];
+                let password = args.get(3).map(|s| s.as_str()).unwrap_or("");
                 let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
-                match rt.block_on(crate::file_cli::list_dir(peer_id, remote_path)) {
+                match rt.block_on(crate::file_cli::list_dir(peer_id, remote_path, password)) {
                     Ok(entries) => {
                         for e in entries {
                             println!("{}", e);
@@ -823,6 +826,86 @@ pub fn core_main() -> Option<Vec<String>> {
                     }
                     Err(e) => my_println!("List failed: {}", e),
                 }
+                return None;
+            } else if args[0] == "--delete-remote" {
+                if args.len() < 3 {
+                    my_println!("Usage: rustdesk --delete-remote <peer_id> <remote_path> [password]");
+                    return None;
+                }
+                let password = args.get(3).map(|s| s.as_str()).unwrap_or("");
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::file_cli::delete_remote(&args[1], &args[2], password)) {
+                    Ok(()) => my_println!("Deleted"),
+                    Err(e) => my_println!("Delete failed: {}", e),
+                }
+                return None;
+            } else if args[0] == "--move-remote" {
+                if args.len() < 4 {
+                    my_println!("Usage: rustdesk --move-remote <peer_id> <old_path> <new_path> [password]");
+                    return None;
+                }
+                let password = args.get(4).map(|s| s.as_str()).unwrap_or("");
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::file_cli::move_remote(&args[1], &args[2], &args[3], password)) {
+                    Ok(()) => my_println!("Moved"),
+                    Err(e) => my_println!("Move failed: {}", e),
+                }
+                return None;
+            } else if args[0] == "--send-dir" {
+                if args.len() < 4 {
+                    my_println!("Usage: rustdesk --send-dir <peer_id> <local_dir> <remote_dir> [password]");
+                    return None;
+                }
+                let password = args.get(4).map(|s| s.as_str()).unwrap_or("");
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::file_cli::send_dir(&args[1], &args[2], &args[3], password)) {
+                    Ok(()) => my_println!("Directory sent"),
+                    Err(e) => my_println!("Send dir failed: {}", e),
+                }
+                return None;
+            } else if args[0] == "--peer-info" {
+                if args.len() < 2 {
+                    my_println!("Usage: rustdesk --peer-info <peer_id>");
+                    return None;
+                }
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::file_cli::peer_info(&args[1])) {
+                    Ok(info) => println!("{}", info),
+                    Err(e) => my_println!("Peer info failed: {}", e),
+                }
+                return None;
+            } else if args[0] == "--status" {
+                match crate::file_cli::local_status() {
+                    Ok(s) => println!("{}", s),
+                    Err(e) => my_println!("Status failed: {}", e),
+                }
+                return None;
+            } else if args[0] == "--help" || args[0] == "-h" {
+                println!(r"RustDesk++ Headless CLI
+
+File operations (relay, password optional for passwordless peers):
+  --send-file <id> <local> <remote> [pwd]   Send file to peer
+  --recv-file <id> <remote> <local> [pwd]   Receive file from peer
+  --list-dir <id> <path> [pwd]              List remote directory
+  --delete-remote <id> <path> [pwd]         Delete remote file
+  --move-remote <id> <old> <new> [pwd]      Move/rename remote file
+  --send-dir <id> <local_dir> <remote> [pwd] Send directory contents
+
+Info:
+  --status                                  Local RustDesk status
+  --peer-info <peer_id>                     Check if peer is online
+  --get-id                                  Print local RustDesk ID
+  --version                                 Print version
+
+Auth:
+  --login                                   OAuth login, prints token
+
+Server:
+  --api-server [port]                       Start HTTP API server (default 10806)
+  --ipc-send <peer_id> <local> <remote>     Send file via IPC tunnel
+
+Standard RustDesk flags also available (--password, --option, etc.)
+");
                 return None;
             }
         }
