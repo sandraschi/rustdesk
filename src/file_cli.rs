@@ -378,7 +378,7 @@ pub fn local_status() -> Result<String, String> {
     ))
 }
 
-fn get_rendezvous_addr() -> String {
+pub fn get_rendezvous_addr() -> String {
     // connect_tcp has DNS resolution issues on this build.
     // Use hardcoded IP for known servers, fall back to config for custom.
     let server = Config::get_rendezvous_server();
