@@ -362,6 +362,80 @@ pub async fn peer_info(peer_id: &str) -> Result<String, String> {
     Err("peer_info: no response from server".into())
 }
 
+pub async fn create_remote_dir(peer_id: &str, remote_path: &str, password: &str) -> Result<(), String> {
+    let mut stream = establish_connection(peer_id).await?;
+    do_login(&mut stream, peer_id, password).await?;
+    let mut action = FileAction::new();
+    action.set_create(FileDirCreate { path: remote_path.to_string(), ..Default::default() });
+    send_msg(&mut stream, action).await?;
+    let resp = recv_msg(&mut stream).await?;
+    if resp.has_error() {
+        return Err(format!("remote error: {}", resp.error().error));
+    }
+    Ok(())
+}
+
+pub async fn remote_restart(peer_id: &str, password: &str) -> Result<(), String> {
+    let mut stream = establish_connection(peer_id).await?;
+    do_login(&mut stream, peer_id, password).await?;
+    let mut misc = Misc::new();
+    misc.set_restart_remote_device(true);
+    let mut msg = Message::new();
+    msg.set_misc(misc);
+    stream.send(&msg).await.map_err(|e| format!("restart send: {}", e))?;
+    log::info!("Restart command sent to {}", peer_id);
+    Ok(())
+}
+
+pub async fn remote_shutdown(peer_id: &str, password: &str) -> Result<(), String> {
+    let mut stream = establish_connection(peer_id).await?;
+    do_login(&mut stream, peer_id, password).await?;
+    let mut misc = Misc::new();
+    misc.set_stop_service(true);
+    let mut msg = Message::new();
+    msg.set_misc(misc);
+    stream.send(&msg).await.map_err(|e| format!("shutdown send: {}", e))?;
+    log::info!("Shutdown command sent to {}", peer_id);
+    Ok(())
+}
+
+pub async fn remote_screenshot(peer_id: &str, output_path: &str, password: &str) -> Result<(), String> {
+    let mut stream = establish_connection(peer_id).await?;
+    do_login(&mut stream, peer_id, password).await?;
+    let mut req = ScreenshotRequest::new();
+    req.display = 0; // primary display
+    let mut msg = Message::new();
+    msg.set_screenshot_request(req);
+    stream.send(&msg).await.map_err(|e| format!("screenshot send: {}", e))?;
+    loop {
+        let buf = match stream.next_timeout(TIMEOUT_SECS * 1000).await {
+            Some(Ok(b)) => b,
+            _ => return Err("screenshot: no response".into()),
+        };
+        let msg: Message = match Message::parse_from_bytes(&buf) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if msg.has_screenshot_response() {
+            let resp = msg.screenshot_response();
+            if !resp.data.is_empty() {
+                use std::io::Write;
+                let mut file = std::fs::File::create(output_path)
+                    .map_err(|e| format!("create output: {}", e))?;
+                file.write_all(&resp.data)
+                    .map_err(|e| format!("write output: {}", e))?;
+                log::info!("Screenshot saved to {}", output_path);
+                return Ok(());
+            }
+            if !resp.msg.is_empty() {
+                return Err(format!("screenshot error: {}", resp.msg));
+            }
+        } else if msg.has_hash() || msg.has_test_delay() || msg.has_login_response() {
+            continue;
+        }
+    }
+}
+
 /// Local RustDesk status: ID, service, connected peers.
 pub fn local_status() -> Result<String, String> {
     let id = Config::get_id();

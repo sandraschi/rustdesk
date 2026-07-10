@@ -880,6 +880,54 @@ pub fn core_main() -> Option<Vec<String>> {
                     Err(e) => my_println!("Status failed: {}", e),
                 }
                 return None;
+            } else if args[0] == "--create-dir" {
+                if args.len() < 3 {
+                    my_println!("Usage: rustdesk --create-dir <peer_id> <remote_path> [password]");
+                    return None;
+                }
+                let password = args.get(3).map(|s| s.as_str()).unwrap_or("");
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::file_cli::create_remote_dir(&args[1], &args[2], password)) {
+                    Ok(()) => my_println!("Directory created"),
+                    Err(e) => my_println!("Create failed: {}", e),
+                }
+                return None;
+            } else if args[0] == "--restart" {
+                if args.len() < 2 {
+                    my_println!("Usage: rustdesk --restart <peer_id> [password]");
+                    return None;
+                }
+                let password = args.get(2).map(|s| s.as_str()).unwrap_or("");
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::file_cli::remote_restart(&args[1], password)) {
+                    Ok(()) => my_println!("Restart command sent"),
+                    Err(e) => my_println!("Restart failed: {}", e),
+                }
+                return None;
+            } else if args[0] == "--shutdown" {
+                if args.len() < 2 {
+                    my_println!("Usage: rustdesk --shutdown <peer_id> [password]");
+                    return None;
+                }
+                let password = args.get(2).map(|s| s.as_str()).unwrap_or("");
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::file_cli::remote_shutdown(&args[1], password)) {
+                    Ok(()) => my_println!("Shutdown command sent"),
+                    Err(e) => my_println!("Shutdown failed: {}", e),
+                }
+                return None;
+            } else if args[0] == "--screenshot" {
+                if args.len() < 3 {
+                    my_println!("Usage: rustdesk --screenshot <peer_id> <output_path> [password]");
+                    return None;
+                }
+                let password = args.get(3).map(|s| s.as_str()).unwrap_or("");
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::file_cli::remote_screenshot(&args[1], &args[2], password)) {
+                    Ok(()) => my_println!("Screenshot saved"),
+                    Err(e) => my_println!("Screenshot failed: {}", e),
+                }
+                return None;
             } else if args[0] == "--help" || args[0] == "-h" {
                 println!(r"RustDesk++ Headless CLI
 
@@ -890,6 +938,12 @@ File operations (relay, password optional for passwordless peers):
   --delete-remote <id> <path> [pwd]         Delete remote file
   --move-remote <id> <old> <new> [pwd]      Move/rename remote file
   --send-dir <id> <local_dir> <remote> [pwd] Send directory contents
+  --create-dir <id> <path> [pwd]            Create remote directory
+
+Remote control:
+  --restart <id> [pwd]                      Restart remote PC
+  --shutdown <id> [pwd]                     Shutdown remote PC
+  --screenshot <id> <output> [pwd]          Capture remote screenshot
 
 Info:
   --status                                  Local RustDesk status

@@ -71,6 +71,33 @@ fn handle_request(request: &str) -> Vec<u8> {
             handle_exec(body)
         }
 
+        ("POST", p) if p.starts_with("/api/v1/peer/") && p.ends_with("/restart") => {
+            let peer_id = extract_peer_id(p, "/restart");
+            handle_remote_action(&peer_id, "restart", body)
+        }
+
+        ("POST", p) if p.starts_with("/api/v1/peer/") && p.ends_with("/shutdown") => {
+            let peer_id = extract_peer_id(p, "/shutdown");
+            handle_remote_action(&peer_id, "shutdown", body)
+        }
+
+        ("POST", p) if p.starts_with("/api/v1/peer/") && p.ends_with("/dir") => {
+            let peer_id = extract_peer_id(p, "/dir");
+            handle_create_dir(&peer_id, body)
+        }
+
+        ("GET", p) if p.starts_with("/api/v1/peer/") && p.ends_with("/screenshot") => {
+            json(501, r#"{"error":"not_implemented","message":"Use CLI --screenshot for now"}"#)
+        }
+
+        ("GET", p) if p.starts_with("/api/v1/peer/") && p.ends_with("/system") => {
+            json(501, r#"{"error":"not_implemented","message":"System info via relay: use --exec to run systeminfo.exe remotely"}"#)
+        }
+
+        ("GET", p) if p.starts_with("/api/v1/peer/") && p.ends_with("/apps") => {
+            json(501, r#"{"error":"not_implemented","message":"Installed apps via relay: use --exec to run 'wmic product get name' remotely"}"#)
+        }
+
         _ => json(404, r#"{"error":"not_found"}"#),
     }
 }
@@ -181,6 +208,46 @@ fn parse_file_req(body: &str) -> (String, String, String, String) {
     let remote = extract_json_str(body, "remote_path").or_else(|| extract_json_str(body, "remote")).unwrap_or_default();
     let password = extract_json_str(body, "password").unwrap_or_default();
     (peer_id, local, remote, password)
+}
+
+fn extract_peer_id<'a>(path: &'a str, suffix: &str) -> &'a str {
+    let prefix = "/api/v1/peer/";
+    path.strip_prefix(prefix).and_then(|s| s.strip_suffix(suffix)).unwrap_or("")
+}
+
+fn handle_remote_action(peer_id: &str, action_suffix: &str, body: &str) -> Vec<u8> {
+    if peer_id.is_empty() {
+        return json(400, r#"{"error":"peer_id required"}"#);
+    }
+    let password = extract_json_str(body, "password").unwrap_or_default();
+    let pid = peer_id.to_owned();
+    let pwd = password.to_owned();
+    let act = action_suffix.to_owned();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        match act.as_str() {
+            a if a == "restart" => { let _ = rt.block_on(crate::file_cli::remote_restart(&pid, &pwd)); }
+            a if a == "shutdown" => { let _ = rt.block_on(crate::file_cli::remote_shutdown(&pid, &pwd)); }
+            _ => {}
+        }
+    });
+    json(200, &format!(r#"{{"success":true,"message":"{} command sent"}}"#, action_suffix))
+}
+
+fn handle_create_dir(peer_id: &str, body: &str) -> Vec<u8> {
+    let path = extract_json_str(body, "path").unwrap_or_default();
+    let password = extract_json_str(body, "password").unwrap_or_default();
+    if peer_id.is_empty() || path.is_empty() {
+        return json(400, r#"{"error":"peer_id and path required"}"#);
+    }
+    let peer_id = peer_id.to_owned();
+    let path = path.to_owned();
+    let password = password.to_owned();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _ = rt.block_on(crate::file_cli::create_remote_dir(&peer_id, &path, &password));
+    });
+    json(200, r#"{"success":true,"message":"create dir started"}"#)
 }
 
 fn extract_json_str(body: &str, key: &str) -> Option<String> {
