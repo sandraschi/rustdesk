@@ -200,15 +200,45 @@ pub async fn recv_file(
         .map_err(|e| format!("create: {}", e))?;
 
     loop {
-        let resp = recv_msg(&mut stream).await?;
-        if resp.has_block() {
-            use tokio::io::AsyncWriteExt;
+        let buf = match stream.next_timeout(TIMEOUT_SECS * 1000).await {
+            Some(Ok(b)) => b,
+            _ => return Err("recv timeout".into()),
+        };
+        let msg: Message = match Message::parse_from_bytes(&buf) {
+            Ok(m) => m,
+            Err(_) => return Err("recv parse".into()),
+        };
+        if msg.has_file_response() {
+            let resp = msg.file_response();
+            log::info!("recv_file: FileResponse block={} done={} error={} digest={} dir={} empty_dirs={}", resp.has_block(), resp.has_done(), resp.has_error(), resp.has_digest(), resp.has_dir(), resp.has_empty_dirs());
+            if resp.has_block() {
+                use tokio::io::AsyncWriteExt;
                 file.write_all(&resp.block().data[..]).await
-                .map_err(|e| format!("write: {}", e))?;
-        } else if resp.has_done() {
-            break;
-        } else if resp.has_error() {
-            return Err(format!("remote error: {}", resp.error().error));
+                    .map_err(|e| format!("write: {}", e))?;
+                log::info!("recv_file: got block ({} bytes)", resp.block().data.len());
+            } else if resp.has_done() {
+                log::info!("recv_file: done");
+                break;
+            } else if resp.has_error() {
+                return Err(format!("remote error: {}", resp.error().error));
+            } else if resp.has_digest() {
+                log::info!("recv_file: got digest, echoing back to confirm");
+                // The server expects a digest echo to confirm the transfer
+                let mut confirm_resp = FileResponse::new();
+                confirm_resp.set_digest(resp.digest().clone());
+                send_file_resp(&mut stream, confirm_resp).await?;
+            } else if resp.has_dir() {
+                log::info!("recv_file: got dir (not expected for receive)");
+                continue;
+            } else {
+                log::info!("recv_file: unexpected FileResponse type");
+            }
+        } else if msg.has_hash() || msg.has_test_delay() || msg.has_login_response() {
+            log::info!("recv_file: skipping handshake msg ({} bytes)", buf.len());
+            continue;
+        } else {
+            log::info!("recv_file: unexpected msg type ({} bytes)", buf.len());
+            continue;
         }
     }
     Ok(())
