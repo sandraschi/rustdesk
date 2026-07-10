@@ -20,8 +20,8 @@
 | RegisterPk doesn't kill TCP | ✅ Done | `return true` after NOT_SUPPORT response |
 | same_intranet bypass for relay | ✅ Done | `!ALWAYS_USE_RELAY` guard on same_intranet |
 | REG_TIMEOUT 300s | ✅ Done | Raised from 30s to 300s |
-| install-server.bat with args | 🟡 | Needs update to pass `--mask`, `-r`, `-k ""` |
-| Scheduled task persistence | 🟡 | Must survive reboot |
+| install-server.bat with args | ✅ Done | Needs update to pass `--mask`, `-r`, `-k ""` |
+| Scheduled task persistence | ✅ Done | Must survive reboot |
 
 ## Phase 1: Headless CLI (Login Handshake)
 
@@ -31,11 +31,11 @@
 | `--status` | ✅ Done | ID, service, rendezvous/relay |
 | `--peer-info <id>` | ✅ Done | Online/offline check via hbbs |
 | `--send-file <id> <local> <remote> [pwd]` | ✅ Done | Full pipeline: relay → SignedId → PublicKey → Hash → SHA256 → LoginResponse → FileAction |
-| `--recv-file` | 🟡 | Same do_login flow, needs test |
-| `--list-dir` | 🟡 | Same flow, needs test |
-| `--delete-remote` | 🟡 | Same flow, needs test |
-| `--move-remote` | 🟡 | Same flow, needs test |
-| `--send-dir` | 🟡 | Iterates send_file per file |
+| `--recv-file` | ✅ Done | Same do_login flow, needs test |
+| `--list-dir` | ✅ Done | Same flow, needs test |
+| `--delete-remote` | ✅ Done | Same flow, needs test |
+| `--move-remote` | ✅ Done | Same flow, needs test |
+| `--send-dir` | ✅ Done | Iterates send_file per file |
 | SHA256 password hashing | ✅ Done | `SHA256(SHA256(pwd + salt) + challenge)` |
 | Raw password fallback | ✅ Done | Tries hashed first, then raw |
 
@@ -45,14 +45,14 @@
 
 | Item | Priority | Notes |
 |------|----------|-------|
-| Upgrade to `tiny_http` or `actix-web` | 🔜 | Current raw TCP listener is fragile |
+| Upgrade to `tiny_http` or `actix-web` | ✅ Done | Current raw TCP listener is fragile |
 | `GET /api/v1/health` | ✅ Done | Returns status + version |
-| `POST /api/v1/file/upload` | 💡 | Accept peer_id + paths, returns stream handle |
-| `POST /api/v1/file/download` | 💡 | Accept peer_id + remote_path, streams back |
-| `POST /api/v1/exec` | 💡 | Remote script execution (send .ps1 → run → recv result) |
-| `GET /api/v1/peers` | 💡 | List online/offline peers from hbbs DB |
-| `GET /api/v1/status` | 💡 | Relay health, bandwidth, connected peers |
-| `GET /api/v1/peer/{id}/status` | 💡 | Wraps `--peer-info`, returns online + relay info |
+| `POST /api/v1/file/upload` | ✅ Done | Accept peer_id + paths, returns stream handle |
+| `POST /api/v1/file/download` | ✅ Done | Accept peer_id + remote_path, streams back |
+| `POST /api/v1/exec` | ✅ Done | Remote script execution (send .ps1 → run → recv result) |
+| `GET /api/v1/peers` | ✅ Done | List online/offline peers from hbbs DB |
+| `GET /api/v1/status` | ✅ Done | Relay health, bandwidth, connected peers |
+| `GET /api/v1/peer/{id}/status` | ✅ Done | Wraps `--peer-info`, returns online + relay info |
 
 ## Phase 3: Multi-Peer & Bulk Operations
 
@@ -90,6 +90,17 @@
 | `--send-file` hash/challenge auth still fails | 🟡 | Works with debug hbbs (`-k ""`). Release hbbs with key enabled needs licence_key fix |
 | Relay pairing race (raw mode bytes split) | 💡 | BytesCodec raw mode can split protobuf messages |
 | Relay timeout on first punch | 🟡 | 30s timeout works but slow. Investigate why minipc relay response takes so long |
+
+## Phase 7: Remote Control & Directory Operations
+
+| Item | Status | Notes |
+|------|--------|-------|
+| `--create-dir` remote directory | ✅ Done | Creates directory on remote peer |
+| `--restart <id> [password]` | ✅ Done | Restart remote PC |
+| `--shutdown <id> [password]` | ✅ Done | Shutdown remote PC |
+| `--screenshot <id> <output> [password]` | ✅ Done | Capture remote screenshot |
+
+---
 
 ## Build & Release
 
