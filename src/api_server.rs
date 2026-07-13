@@ -103,9 +103,59 @@ fn handle_request(request: &str) -> Vec<u8> {
 }
 
 fn handle_peers() -> Vec<u8> {
-    // Peer list requires SQLite access via hbbs DB tools. Use the rustdesk-mcp
-    // webapp dashboard for a full peer overview, or run a separate query tool.
-    json(200, r#"{"peers":[],"note":"Use hbbs DB directly or rustdesk-mcp webapp for peer list"}"#)
+    let db_path = find_hbbs_db();
+    if db_path.is_empty() {
+        return json(200, r#"{"peers":[],"note":"hbbs DB not found"}"#);
+    }
+    // Query via Python helper (rusqlite not available in fork)
+    let script = format!(
+        "import json, sqlite3, os\n\
+         db = r'{}'\n\
+         try:\n\
+         \x20 c = sqlite3.connect(db)\n\
+         \x20 rows = c.execute('SELECT id, info, created_at FROM peer ORDER BY created_at DESC').fetchall()\n\
+         \x20 peers = [{{\"id\": r[0], \"info\": json.loads(r[1]) if r[1] else {{}}, \"created\": r[2] or \"\"}} for r in rows]\n\
+         \x20 print(json.dumps({{\"peers\": peers, \"count\": len(peers)}}))\n\
+         except Exception as e:\n\
+         \x20 print(json.dumps({{\"peers\": [], \"error\": str(e)}}))",
+        db_path.replace("\\", "\\\\")
+    );
+    match std::process::Command::new("uv")
+        .args(["run", "python", "-c", &script])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            let body = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            json(200, &body)
+        }
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr);
+            json(500, &format!(r#"{{"peers":[],"error":"{}"}}"#, err.trim().replace('"', "\\\"")))
+        }
+        Err(e) => json(500, &format!(r#"{{"peers":[],"error":"{}"}}"#, e)),
+    }
+}
+
+fn find_hbbs_db() -> String {
+    // Check known paths for the hbbs SQLite DB
+    let paths = [
+        // NSSM service data dir (local fork data)
+        "D:\\Dev\\repos\\rustdesk-server\\data\\db_v2.sqlite3",
+        // Windows APPDATA (RustDesk client config)
+    ];
+    for p in &paths {
+        if std::path::Path::new(p).exists() {
+            return p.to_string();
+        }
+    }
+    // Try APPDATA via env
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let p = format!("{}\\RustDesk\\config\\db_v2.sqlite3", appdata);
+        if std::path::Path::new(&p).exists() {
+            return p;
+        }
+    }
+    String::new()
 }
 
 fn handle_peer_status(peer_id: &str) -> Vec<u8> {
