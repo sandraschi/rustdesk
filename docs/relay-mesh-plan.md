@@ -26,16 +26,18 @@ Peer A (Goliath)                         Peer B (minipc)
   │    └── relay sysinfo poll ────────────────►  System status
 ```
 
-## Phase 1: Fleet Mesh Discovery (Next)
+## Phase 1: Fleet Mesh Discovery (Done)
 
 | Component | Description | Priority |
 |-----------|-------------|----------|
-| `GET /api/v1/peers` | List online peers from hbbs SQLite DB | HIGH |
-| `GET /api/v1/peer/{id}/status` | Check if peer is online (exists) | HIGH |
-| `POST /api/v1/peer/{id}/ping` | Ping peer through relay | MEDIUM |
-| `GET /api/v1/relay/health` | hbbs/hbbr connection stats, bandwidth | MEDIUM |
+| `GET /api/v1/peers` | List online peers from hbbs SQLite DB | ✅ |
+| `GET /api/v1/peer/{id}/status` | Check if peer is online (exists) | ✅ |
+| `POST /api/v1/peer/{id}/ping` | Ping peer through relay | ✅ |
+| `GET /api/v1/relay/health` | hbbs/hbbr connection stats, bandwidth | ✅ |
 
 The fork's `--api-server` already has `GET /api/v1/health`, `GET /api/v1/peer/{id}`, `POST /api/v1/file/upload`. Phase 1 adds peer discovery.
+
+Phase 1 implemented 2026-07-13 — hbbs SQLite peer discovery via Python helper.
 
 ## Phase 2: MCP Relay Bridge
 

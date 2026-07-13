@@ -37,6 +37,7 @@ This fork adds **headless CLI file transfer** and a **REST API** to RustDesk, tu
 - `POST /api/v1/peer/{id}/restart` — Restart peer
 - `POST /api/v1/peer/{id}/shutdown` — Shutdown peer
 - `POST /api/v1/peer/{id}/dir` — Create directory (body: path, password)
+- `GET  /api/v1/peers` — List registered peers from hbbs database
 
 ### Auth
 - `--login` — OAuth login, prints token
