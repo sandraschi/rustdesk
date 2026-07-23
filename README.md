@@ -9,7 +9,7 @@
 </p>
 
 > [!IMPORTANT]
-> **This is the rustdesk++ fork** — enhanced with headless CLI file transfer, a REST API, remote control (restart/shutdown/screenshot), and relay infrastructure improvements.
+> **This is the rustdesk++ fork** — enhanced with headless CLI file transfer, a REST API, remote control (restart/shutdown/screenshot), multi-peer bulk operations (broadcast, collect, batch), and relay infrastructure improvements.
 > See [`README.rustdesk++.md`](README.rustdesk++.md) for full documentation and [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) for implementation status.
 
 > [!Caution]

@@ -2,21 +2,16 @@
 /// Uses rendezvous + relay protocol to transfer files without GUI.
 
 use hbb_common::{
-    anyhow,
-    bytes,
-    config::{self, Config, RENDEZVOUS_PORT},
+    config::{Config, RENDEZVOUS_PORT},
     fs::{self, TransferJob},
-    futures,
     log,
     message_proto::*,
-    protobuf::{self, Enum as _, Message as _},
+    protobuf::{Enum as _, Message as _},
     rendezvous_proto::*,
     socket_client,
-    timeout,
     tokio,
     Stream,
 };
-use std::sync::Arc;
 
 const TIMEOUT_SECS: u64 = 30;
 
@@ -426,6 +421,220 @@ pub async fn remote_screenshot(peer_id: &str, output_path: &str, password: &str)
             continue;
         }
     }
+}
+
+/// Send one file to multiple peers sequentially.
+pub async fn broadcast_file(
+    peer_ids: &str,
+    local_path: &str,
+    remote_path: &str,
+    password: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let ids: Vec<&str> = peer_ids.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    if ids.is_empty() {
+        return Err("no peer IDs provided".into());
+    }
+    let mut results = Vec::new();
+    for id in &ids {
+        match send_file(id, local_path, remote_path, password).await {
+            Ok(()) => results.push((id.to_string(), "ok".to_string())),
+            Err(e) => results.push((id.to_string(), format!("error: {}", e))),
+        }
+    }
+    Ok(results)
+}
+
+/// Collect files from multiple peers by listing each remote dir and pulling files.
+pub async fn collect_files(
+    peer_ids: &str,
+    remote_dir: &str,
+    local_dir: &str,
+    password: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let ids: Vec<&str> = peer_ids.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    if ids.is_empty() {
+        return Err("no peer IDs provided".into());
+    }
+    std::fs::create_dir_all(local_dir).map_err(|e| format!("mkdir local: {}", e))?;
+
+    let mut results = Vec::new();
+    for id in &ids {
+        let entries = list_dir(id, remote_dir, password).await?;
+        for entry in &entries {
+            if entry.starts_with("[FILE]") {
+                let name = entry.split_whitespace().nth(1).unwrap_or("");
+                if !name.is_empty() {
+                    let rpath = format!("{}/{}", remote_dir.trim_end_matches('/'), name);
+                    let lpath = format!("{}/{}", local_dir.trim_end_matches('/'), name);
+                    match recv_file(id, &rpath, &lpath, password).await {
+                        Ok(()) => results.push((format!("{}:{}", id, name), "ok".to_string())),
+                        Err(e) => results.push((format!("{}:{}", id, name), format!("error: {}", e))),
+                    }
+                }
+            }
+        }
+    }
+    Ok(results)
+}
+
+/// Batch: read a JSON manifest and execute the sequence of operations.
+///
+/// Manifest format:
+/// ```json
+/// {
+///   "password": "optional_default",
+///   "operations": [
+///     { "op": "send_file", "peer_id": "...", "local": "...", "remote": "..." },
+///     { "op": "recv_file", "peer_id": "...", "remote": "...", "local": "..." },
+///     ...
+///   ]
+/// }
+/// ```
+pub async fn batch_ops(manifest_path: &str, default_password: &str) -> Result<Vec<String>, String> {
+    let content = std::fs::read_to_string(manifest_path)
+        .map_err(|e| format!("read manifest '{}': {}", manifest_path, e))?;
+    // Minimal JSON parsing without serde dependency -- same pattern as api_server.rs
+    let password = extract_json_str(&content, "password").unwrap_or_else(|| default_password.to_owned());
+    let ops_block = extract_json_array(&content, "operations").unwrap_or_default();
+
+    if ops_block.is_empty() {
+        return Err("no operations in manifest".into());
+    }
+
+    let mut results = Vec::new();
+    // Parse each operation object from the array block
+    // ops_block is the text between [ and ] for the operations array
+    let mut depth = 0;
+    let mut start = 0;
+    let mut objs = Vec::new();
+    for (i, byte) in ops_block.bytes().enumerate() {
+        match byte {
+            b'{' if depth == 0 => start = i,
+            b'{' => depth += 1,
+            b'}' if depth > 0 => depth -= 1,
+            b'}' if depth == 0 => {
+                objs.push(&ops_block[start..=i]);
+            }
+            _ => {}
+        }
+    }
+
+    for obj_str in &objs {
+        let op = extract_json_str(obj_str, "op").unwrap_or_default();
+        let peer_id = extract_json_str(obj_str, "peer_id").unwrap_or_default();
+        let pwd = extract_json_str(obj_str, "password").unwrap_or_else(|| password.clone());
+
+        let result = match op.as_str() {
+            "send_file" => {
+                let local = extract_json_str(obj_str, "local").unwrap_or_default();
+                let remote = extract_json_str(obj_str, "remote").unwrap_or_default();
+                send_file(&peer_id, &local, &remote, &pwd).await
+                    .map(|_| format!("[{}] send_file {} -> {}: ok", peer_id, local, remote))
+                    .unwrap_or_else(|e| format!("[{}] send_file: {}", peer_id, e))
+            }
+            "recv_file" => {
+                let remote = extract_json_str(obj_str, "remote").unwrap_or_default();
+                let local = extract_json_str(obj_str, "local").unwrap_or_default();
+                recv_file(&peer_id, &remote, &local, &pwd).await
+                    .map(|_| format!("[{}] recv_file {} <- {}: ok", peer_id, remote, local))
+                    .unwrap_or_else(|e| format!("[{}] recv_file: {}", peer_id, e))
+            }
+            "list_dir" => {
+                let path = extract_json_str(obj_str, "path").unwrap_or_default();
+                match list_dir(&peer_id, &path, &pwd).await {
+                    Ok(entries) => format!("[{}] list_dir {}: {} entries", peer_id, path, entries.len()),
+                    Err(e) => format!("[{}] list_dir: {}", peer_id, e),
+                }
+            }
+            "delete_remote" => {
+                let path = extract_json_str(obj_str, "path").unwrap_or_default();
+                delete_remote(&peer_id, &path, &pwd).await
+                    .map(|_| format!("[{}] delete_remote {}: ok", peer_id, path))
+                    .unwrap_or_else(|e| format!("[{}] delete_remote: {}", peer_id, e))
+            }
+            "move_remote" => {
+                let old = extract_json_str(obj_str, "old").unwrap_or_default();
+                let new = extract_json_str(obj_str, "new").unwrap_or_default();
+                move_remote(&peer_id, &old, &new, &pwd).await
+                    .map(|_| format!("[{}] move_remote {} -> {}: ok", peer_id, old, new))
+                    .unwrap_or_else(|e| format!("[{}] move_remote: {}", peer_id, e))
+            }
+            "send_dir" => {
+                let local = extract_json_str(obj_str, "local").unwrap_or_default();
+                let remote = extract_json_str(obj_str, "remote").unwrap_or_default();
+                send_dir(&peer_id, &local, &remote, &pwd).await
+                    .map(|_| format!("[{}] send_dir {} -> {}: ok", peer_id, local, remote))
+                    .unwrap_or_else(|e| format!("[{}] send_dir: {}", peer_id, e))
+            }
+            "create_dir" => {
+                let path = extract_json_str(obj_str, "path").unwrap_or_default();
+                create_remote_dir(&peer_id, &path, &pwd).await
+                    .map(|_| format!("[{}] create_dir {}: ok", peer_id, path))
+                    .unwrap_or_else(|e| format!("[{}] create_dir: {}", peer_id, e))
+            }
+            "restart" => {
+                remote_restart(&peer_id, &pwd).await
+                    .map(|_| format!("[{}] restart: ok", peer_id))
+                    .unwrap_or_else(|e| format!("[{}] restart: {}", peer_id, e))
+            }
+            "shutdown" => {
+                remote_shutdown(&peer_id, &pwd).await
+                    .map(|_| format!("[{}] shutdown: ok", peer_id))
+                    .unwrap_or_else(|e| format!("[{}] shutdown: {}", peer_id, e))
+            }
+            "screenshot" => {
+                let output = extract_json_str(obj_str, "output").unwrap_or_else(|| "screenshot.png".to_owned());
+                remote_screenshot(&peer_id, &output, &pwd).await
+                    .map(|_| format!("[{}] screenshot -> {}: ok", peer_id, output))
+                    .unwrap_or_else(|e| format!("[{}] screenshot: {}", peer_id, e))
+            }
+            "peer_info" => {
+                peer_info(&peer_id).await
+                    .unwrap_or_else(|e| format!("[{}] peer_info: {}", peer_id, e))
+            }
+            _ => format!("[{}] unknown op '{}'", peer_id, op),
+        };
+        results.push(result);
+    }
+    Ok(results)
+}
+
+fn extract_json_str<'a>(body: &'a str, key: &str) -> Option<String> {
+    let pattern = format!(r#""{}":"#, key);
+    let start = body.find(&pattern)?;
+    let start = start + pattern.len();
+    let bytes = body[start..].as_bytes();
+    if bytes.first()? == &b'"' {
+        let mut end = start + 1;
+        while end < body.len() && bytes[end - start] != b'"' {
+            end += 1;
+        }
+        Some(body[start + 1..end].to_owned())
+    } else {
+        let end = start + bytes.iter().take_while(|&&b| b != b',' && b != b'}' && b != b' ').count();
+        Some(body[start..start + end].to_owned())
+    }
+}
+
+fn extract_json_array<'a>(body: &'a str, key: &str) -> Option<&'a str> {
+    let pattern = format!(r#""{}":"#, key);
+    let start = body.find(&pattern)? + pattern.len();
+    let bytes = body[start..].as_bytes();
+    let array_start = bytes.iter().position(|&b| b == b'[')? + start;
+    let mut depth = 0;
+    for (i, byte) in body[array_start..].bytes().enumerate() {
+        match byte {
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&body[array_start..=array_start + i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Local RustDesk status: ID, service, connected peers.

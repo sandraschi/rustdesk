@@ -2,10 +2,10 @@
 
 ## Status Key
 
-- ✅ **Done** — tested and working
-- 🟡 **Implemented, needs test** — code written, not yet verified
-- 🔜 **Planned** — design clear, not started
-- 💡 **Proposed** — needs requirements discussion
+- ✅ **Done** -- tested and working
+- 🟡 **Implemented, needs test** -- code written, not yet verified
+- 🔜 **Planned** -- design clear, not started
+- 💡 **Proposed** -- needs requirements discussion
 
 ---
 
@@ -20,7 +20,7 @@
 | RegisterPk doesn't kill TCP | ✅ Done | `return true` after NOT_SUPPORT response |
 | same_intranet bypass for relay | ✅ Done | `!ALWAYS_USE_RELAY` guard on same_intranet |
 | REG_TIMEOUT 300s | ✅ Done | Raised from 30s to 300s |
-| install-server.bat with args | ✅ Done | Needs update to pass `--mask`, `-r`, `-k ""` |
+| install-server.bat with args | 🔜 | Must pass `--mask`, `-r`, `-k ""`, `ALWAYS_USE_RELAY=Y` |
 | Scheduled task persistence | ✅ Done | Must survive reboot |
 
 ## Phase 1: Headless CLI (Login Handshake)
@@ -30,47 +30,47 @@
 | `--help` | ✅ Done | All commands listed |
 | `--status` | ✅ Done | ID, service, rendezvous/relay |
 | `--peer-info <id>` | ✅ Done | Online/offline check via hbbs |
-| `--send-file <id> <local> <remote> [pwd]` | ✅ Done | Full pipeline: relay → SignedId → PublicKey → Hash → SHA256 → LoginResponse → FileAction |
-| `--recv-file` | ✅ Done | Same do_login flow, needs test |
-| `--list-dir` | ✅ Done | Same flow, needs test |
-| `--delete-remote` | ✅ Done | Same flow, needs test |
-| `--move-remote` | ✅ Done | Same flow, needs test |
+| `--send-file <id> <local> <remote> [pwd]` | ✅ Done | Full pipeline: relay -> SignedId -> PublicKey -> Hash -> SHA256 -> LoginResponse -> FileAction |
+| `--recv-file` | ✅ Done | Same do_login flow |
+| `--list-dir` | ✅ Done | Same flow |
+| `--delete-remote` | ✅ Done | Same flow |
+| `--move-remote` | ✅ Done | Same flow |
 | `--send-dir` | ✅ Done | Iterates send_file per file |
 | SHA256 password hashing | ✅ Done | `SHA256(SHA256(pwd + salt) + challenge)` |
 | Raw password fallback | ✅ Done | Tries hashed first, then raw |
 
 ## Phase 2: REST API Server (`--api-server`)
 
-**Current state:** Bare-bones TCP listener with 3 endpoints. Need to move to a proper HTTP framework.
-
 | Item | Priority | Notes |
 |------|----------|-------|
-| Upgrade to `tiny_http` or `actix-web` | ✅ Done | Current raw TCP listener is fragile |
 | `GET /api/v1/health` | ✅ Done | Returns status + version |
 | `POST /api/v1/file/upload` | ✅ Done | Accept peer_id + paths, returns stream handle |
 | `POST /api/v1/file/download` | ✅ Done | Accept peer_id + remote_path, streams back |
-| `POST /api/v1/exec` | ✅ Done | Remote script execution (send .ps1 → run → recv result) |
+| `POST /api/v1/exec` | 🔜 Stub | Returns 501 -- needs relay-based script send/recv pipeline |
 | `GET /api/v1/peers` | ✅ Done | List online/offline peers from hbbs DB |
-| `GET /api/v1/status` | ✅ Done | Relay health, bandwidth, connected peers |
-| `GET /api/v1/peer/{id}/status` | ✅ Done | Wraps `--peer-info`, returns online + relay info |
+| `GET /api/v1/peer/{id}/status` | ✅ Done | Wraps peer-info, returns online + relay info |
+| `GET /api/v1/peer/{id}/screenshot` | 🔜 Stub | Returns 501 -- use CLI --screenshot |
+| `GET /api/v1/peer/{id}/system` | 🔜 Stub | Returns 501 -- use --exec pipeline |
+| `GET /api/v1/peer/{id}/apps` | 🔜 Stub | Returns 501 -- use --exec pipeline |
+| Upgrade to `tiny_http` or `actix-web` | 💡 | Currently raw `TcpListener` -- fragile for real HTTP |
 
 ## Phase 3: Multi-Peer & Bulk Operations
 
 | Item | Priority | Notes |
 |------|----------|-------|
-| `--broadcast-file <id1,id2,...>` | 💡 | Send one file to N peers sequentially |
-| `--collect-files <ids...> <glob> <dir>` | 💡 | Pull matching files from multiple peers |
-| `--sync-dir <id> <local> <remote>` | 💡 | Bidirectional directory sync (walk tree, diff, xfer) |
+| `--broadcast-file <id1,id2,...>` | ✅ Done | Sends one file to N peers sequentially, reports per-peer result |
+| `--collect-files <ids...> <remote_dir> <local_dir>` | ✅ Done | Lists remote dir on each peer, pulls all matching files |
+| `--batch <manifest.json>` | ✅ Done | Reads JSON manifest, dispatches ops, reports results |
+| `--sync-dir <id> <local> <remote>` | 🔜 | Bidirectional directory sync (walk tree, diff, xfer) |
 | `--mirror <id> <local> <remote>` | 💡 | Full recursive mirror (delete extraneous) |
-| `--batch <manifest.json>` | 💡 | Execute sequence of ops from JSON |
 
 ## Phase 4: Cross-Fleet MCP Integration
 
 | Item | Priority | Notes |
 |------|----------|-------|
-| `rustdesk --mcp` — native MCP server | 💡 | Exposes file ops as MCP tools for Cursor/Claude |
+| `rustdesk --mcp` -- native MCP server | 💡 | Exposes file ops as MCP tools for Cursor/Claude |
 | `GET /api/v1/metrics` for monitoring-mcp | 💡 | Memory/disk/uptime from remote via relay |
-| `--script <peer_id> <script_type>` | 💡 | "ps1" / "python" / "bash" — upload, exec, return result |
+| `--script <peer_id> <script_type>` | 💡 | "ps1" / "python" / "bash" -- upload, exec, return result |
 | fleet discovery integration | 💡 | Other MCP servers can discover peers via hbbs API |
 
 ## Phase 5: Infrastructure Hardening
@@ -90,6 +90,7 @@
 | `--send-file` hash/challenge auth still fails | 🟡 | Works with debug hbbs (`-k ""`). Release hbbs with key enabled needs licence_key fix |
 | Relay pairing race (raw mode bytes split) | 💡 | BytesCodec raw mode can split protobuf messages |
 | Relay timeout on first punch | 🟡 | 30s timeout works but slow. Investigate why minipc relay response takes so long |
+| CLI `--screenshot` empty response on some peers | 🟡 | ScreenshotRequest not supported by all hbbs relay configurations |
 
 ## Phase 7: Remote Control & Directory Operations
 
@@ -114,10 +115,10 @@
 
 ## Priority Order
 
-1. **Test `--recv-file`, `--list-dir`, `--delete-remote`, `--move-remote`** with `Sec10000` — same code path as `--send-file`, should work immediately
-2. **Update `install-server.bat`** with `--mask`, `-r`, `-k ""` — relay survival across reboots
+1. **Test `--recv-file`, `--list-dir`, `--delete-remote`, `--move-remote`** -- same code path as `--send-file`, should work immediately
+2. **Update `install-server.bat`** with `--mask`, `-r`, `-k ""` -- relay survival across reboots
 3. **Build release binary** of hbbs with all 3 fixes, ship as `hbbs.exe` replacement
 4. **Implement API server** with `tiny_http` or `actix-web` for REST endpoints
-5. **Add `--batch`** for JSON-based multi-op manifests
+5. **Add `--batch`** for JSON-based multi-op manifests ✅ Done
 6. **Add `--mcp`** for native MCP protocol server
 7. **Cross-fleet integration** with monitoring-mcp, fleet-agent-mcp

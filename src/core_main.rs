@@ -928,6 +928,61 @@ pub fn core_main() -> Option<Vec<String>> {
                     Err(e) => my_println!("Screenshot failed: {}", e),
                 }
                 return None;
+            } else if args[0] == "--broadcast-file" {
+                if args.len() < 4 {
+                    my_println!("Usage: rustdesk --broadcast-file <id1,id2,...> <local_path> <remote_path> [password]");
+                    return None;
+                }
+                let password = args.get(4).map(|s| s.as_str()).unwrap_or("");
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::file_cli::broadcast_file(&args[1], &args[2], &args[3], password)) {
+                    Ok(results) => {
+                        for (id, status) in &results {
+                            println!("  {}: {}", id, status);
+                        }
+                        my_println!("Broadcast complete: {} ok, {} failed",
+                            results.iter().filter(|(_, s)| s == "ok").count(),
+                            results.iter().filter(|(_, s)| s != "ok").count());
+                    }
+                    Err(e) => my_println!("Broadcast failed: {}", e),
+                }
+                return None;
+            } else if args[0] == "--collect-files" {
+                if args.len() < 4 {
+                    my_println!("Usage: rustdesk --collect-files <id1,id2,...> <remote_dir> <local_dir> [password]");
+                    return None;
+                }
+                let password = args.get(4).map(|s| s.as_str()).unwrap_or("");
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::file_cli::collect_files(&args[1], &args[2], &args[3], password)) {
+                    Ok(results) => {
+                        for (file, status) in &results {
+                            println!("  {}: {}", file, status);
+                        }
+                        my_println!("Collect complete: {} ok, {} failed",
+                            results.iter().filter(|(_, s)| s == "ok").count(),
+                            results.iter().filter(|(_, s)| s != "ok").count());
+                    }
+                    Err(e) => my_println!("Collect failed: {}", e),
+                }
+                return None;
+            } else if args[0] == "--batch" {
+                if args.len() < 2 {
+                    my_println!("Usage: rustdesk --batch <manifest.json> [default_password]");
+                    return None;
+                }
+                let default_password = args.get(2).map(|s| s.as_str()).unwrap_or("");
+                let rt = hbb_common::tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(crate::file_cli::batch_ops(&args[1], default_password)) {
+                    Ok(results) => {
+                        for r in &results {
+                            println!("{}", r);
+                        }
+                        my_println!("Batch complete: {} ops", results.len());
+                    }
+                    Err(e) => my_println!("Batch failed: {}", e),
+                }
+                return None;
             } else if args[0] == "--help" || args[0] == "-h" {
                 println!(r"RustDesk++ Headless CLI
 
@@ -944,6 +999,11 @@ Remote control:
   --restart <id> [pwd]                      Restart remote PC
   --shutdown <id> [pwd]                     Shutdown remote PC
   --screenshot <id> <output> [pwd]          Capture remote screenshot
+
+Multi-peer & bulk:
+  --broadcast-file <ids...> <local> <remote> [pwd]  Send file to N peers
+  --collect-files <ids...> <rdir> <ldir> [pwd]      Pull files from N peers
+  --batch <manifest.json> [pwd]                      Execute ops from JSON
 
 Info:
   --status                                  Local RustDesk status
@@ -1137,6 +1197,23 @@ fn is_user_main_ipc_scope_cli_command(args: &[String]) -> bool {
             | Some("--option")
             | Some("--assign")
             | Some("--deploy")
+            | Some("--status")
+            | Some("--peer-info")
+            | Some("--send-file")
+            | Some("--recv-file")
+            | Some("--list-dir")
+            | Some("--delete-remote")
+            | Some("--move-remote")
+            | Some("--send-dir")
+            | Some("--create-dir")
+            | Some("--restart")
+            | Some("--shutdown")
+            | Some("--screenshot")
+            | Some("--broadcast-file")
+            | Some("--collect-files")
+            | Some("--batch")
+            | Some("--api-server")
+            | Some("--ipc-send")
     )
 }
 

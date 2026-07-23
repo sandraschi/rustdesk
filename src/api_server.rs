@@ -2,16 +2,13 @@
 /// Started via `rustdesk --api-server <port>`.
 
 use hbb_common::{
-    config::Config,
     log,
-    protobuf::Message as _,
     rendezvous_proto::*,
     socket_client,
     tokio,
 };
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
 
 pub fn start_api_server(port: u16) {
     let addr = format!("127.0.0.1:{}", port);
