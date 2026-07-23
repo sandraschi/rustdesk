@@ -8,6 +8,10 @@
   <b>We need your help to translate this README, <a href="https://github.com/rustdesk/rustdesk/tree/master/src/lang">RustDesk UI</a> and <a href="https://github.com/rustdesk/doc.rustdesk.com">RustDesk Doc</a> to your native language</b>
 </p>
 
+> [!IMPORTANT]
+> **This is the rustdesk++ fork** — enhanced with headless CLI file transfer, a REST API, remote control (restart/shutdown/screenshot), and relay infrastructure improvements.
+> See [`README.rustdesk++.md`](README.rustdesk++.md) for full documentation and [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) for implementation status.
+
 > [!Caution]
 > **Misuse Disclaimer:** <br>
 > The developers of RustDesk do not condone or support any unethical or illegal use of this software. Misuse, such as unauthorized access, control or invasion of privacy, is strictly against our guidelines. The authors are not responsible for any misuse of the application.
